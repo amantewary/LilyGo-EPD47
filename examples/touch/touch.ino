@@ -28,7 +28,7 @@
 #include "firasans.h"
 #include <Wire.h>
 #include "lilygo.h"
-#include <TouchDrvGT911.hpp>
+#include <TouchDrvGT911.hpp>  //Arduino IDE -> Library manager -> Install SensorLib v0.19 
 #include "utilities.h"
 
 TouchDrvGT911 touch;
