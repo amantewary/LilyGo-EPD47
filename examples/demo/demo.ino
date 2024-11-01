@@ -163,8 +163,8 @@ void setup()
     epd_draw_image(area, (uint8_t *)logo_data, BLACK_ON_WHITE);
 
 
-    int cursor_x = 200;
-    int cursor_y = 200;
+    int32_t cursor_x = 200;
+    int32_t cursor_y = 200;
 
 
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
@@ -285,8 +285,8 @@ void loop()
             .height = 100,
         };
 
-        int cursor_x = 200;
-        int cursor_y = 350;
+        int32_t cursor_x = 200;
+        int32_t cursor_y = 350;
         epd_clear_area(area);
 
         writeln((GFXfont *)&FiraSans, (char *)voltage.c_str(), &cursor_x, &cursor_y, NULL);
@@ -332,8 +332,8 @@ void loop()
             // When reading the battery voltage, POWER_EN must be turned on
             epd_poweron();
 
-            int cursor_x = 200;
-            int cursor_y = 450;
+            int32_t cursor_x = 200;
+            int32_t cursor_y = 450;
 
             Rect_t area = {
                 .x = 200,

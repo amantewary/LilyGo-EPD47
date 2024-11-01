@@ -31,8 +31,8 @@ void setup()
     epd_poweron();
     epd_clear();
 
-    int cursor_x = 200;
-    int cursor_y = 200;
+    int32_t cursor_x = 200;
+    int32_t cursor_y = 200;
 
     String str = "➸ Boot Count:" + String(boot_count);
     writeln((GFXfont *)&FiraSans, str.c_str(), &cursor_x, &cursor_y, NULL);

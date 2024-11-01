@@ -30,6 +30,7 @@
 #include "lilygo.h"
 #include <TouchDrvGT911.hpp>  //Arduino IDE -> Library manager -> Install SensorLib v0.19 
 #include "utilities.h"
+#include "hal/gpio_types.h"
 
 TouchDrvGT911 touch;
 uint8_t *framebuffer = NULL;
@@ -62,8 +63,8 @@ const char srceen_features[] = {
 
 // const char *string_array[] = {overview, mcu_features, srceen_features};
 
-int cursor_x = 20;
-int cursor_y = 60;
+int32_t cursor_x = 20;
+int32_t cursor_y = 60;
 
 Rect_t area1 = {
     .x = 10,
@@ -218,9 +219,9 @@ void loop()
 
 #if defined(CONFIG_IDF_TARGET_ESP32)
             // Set to wake up by GPIO39
-            esp_sleep_enable_ext1_wakeup(GPIO_SEL_39, ESP_EXT1_WAKEUP_ANY_LOW);
+            esp_sleep_enable_ext1_wakeup(_BV(GPIO_NUM_39), ESP_EXT1_WAKEUP_ANY_LOW);
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
-            esp_sleep_enable_ext1_wakeup(GPIO_SEL_21, ESP_EXT1_WAKEUP_ANY_LOW);
+            esp_sleep_enable_ext1_wakeup(_BV(GPIO_NUM_21), ESP_EXT1_WAKEUP_ANY_LOW);
 #endif
 
 
