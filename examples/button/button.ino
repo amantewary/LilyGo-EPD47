@@ -22,7 +22,7 @@
 #include <Arduino.h>
 #include "epd_driver.h"
 #include "firasans.h"
-#include "Button2.h"
+#include "Button2.h"        //Arduino IDE -> Library manager -> Install Button2
 #include "lilygo.h"
 #include "logo.h"
 
