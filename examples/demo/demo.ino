@@ -29,7 +29,7 @@
 #include "logo.h"
 
 #include <Wire.h>
-#include <TouchDrvGT911.hpp>        
+#include <TouchDrvGT911.hpp>    //Arduino IDE -> Library manager -> Install SensorLib v0.19     
 #include <SensorPCF8563.hpp>
 #include <WiFi.h>
 #include <esp_sntp.h>
