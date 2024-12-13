@@ -12,7 +12,7 @@
  *                  PSRAM:"OPI PSRAM"
  *                  Upload Mode:"UART0/Hardware CDC"
  *                  USB Mode:"Hardware CDC and JTAG"
- *  
+ *
  */
 
 #ifndef BOARD_HAS_PSRAM
@@ -27,7 +27,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include "logo.h"
-
+#include "Button2.h"            //Arduino IDE -> Library manager -> Install Button2
 #include <Wire.h>
 #include <TouchDrvGT911.hpp>    //Arduino IDE -> Library manager -> Install SensorLib v0.19     
 #include <SensorPCF8563.hpp>
@@ -35,9 +35,14 @@
 #include <esp_sntp.h>
 #include "utilities.h"
 
-
+#ifndef WIFI_SSID
 #define WIFI_SSID             "Your WiFi SSID"
+#endif
+
+#ifndef WIFI_PASSWORD
 #define WIFI_PASSWORD         "Your WiFi PASSWORD"
+#endif
+
 
 const char *ntpServer1 = "pool.ntp.org";
 const char *ntpServer2 = "time.nist.gov";
@@ -45,6 +50,8 @@ const long  gmtOffset_sec = 3600;
 const int   daylightOffset_sec = 3600;
 const char *time_zone = "CST-8";  // TimeZone rule for Europe/Rome including daylight adjustment rules (optional)
 
+Button2 btn1(BUTTON_1);
+Button2 btn2(0);        //BOOT PIN
 
 SensorPCF8563 rtc;
 TouchDrvGT911 touch;
@@ -81,6 +88,14 @@ void timeavailable(struct timeval *t)
     Serial.println("[WiFi]: Got time adjustment from NTP!");
     rtc.hwClockWrite();
 }
+
+
+
+void buttonPressed(Button2 &b)
+{
+    Serial.println("Button Pressed!");
+}
+
 
 void setup()
 {
@@ -255,9 +270,13 @@ void setup()
     write_mode((GFXfont *)&FiraSans, "Sleep", &x, &y, framebuffer, WHITE_ON_BLACK, NULL);
 
     epd_draw_grayscale_image(epd_full_screen(), framebuffer);
-
+    
 
     epd_poweroff();
+
+
+    btn1.setPressedHandler(buttonPressed);
+    btn2.setPressedHandler(buttonPressed);
 
 }
 
@@ -410,6 +429,9 @@ void loop()
             epd_poweroff_all();
         }
     }
+
+    btn1.loop();
+    btn2.loop();
 
     delay(2);
 }
