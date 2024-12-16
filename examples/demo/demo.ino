@@ -50,8 +50,7 @@ const long  gmtOffset_sec = 3600;
 const int   daylightOffset_sec = 3600;
 const char *time_zone = "CST-8";  // TimeZone rule for Europe/Rome including daylight adjustment rules (optional)
 
-Button2 btn1(BUTTON_1);
-Button2 btn2(0);        //BOOT PIN
+Button2 btn(BUTTON_1);
 
 SensorPCF8563 rtc;
 TouchDrvGT911 touch;
@@ -90,11 +89,28 @@ void timeavailable(struct timeval *t)
 }
 
 
-
+uint32_t pressed_cnt = 0;
 void buttonPressed(Button2 &b)
 {
-    Serial.println("Button Pressed!");
+    Serial.println("Button1 Pressed!");
+    int32_t cursor_x = 200;
+    int32_t cursor_y = 450;
+
+    Rect_t area = {
+        .x = 200,
+        .y = 410,
+        .width = 400,
+        .height = 50,
+    };
+
+    // When reading the battery voltage, POWER_EN must be turned on
+    epd_poweron();
+    epd_clear_area(area);
+    snprintf(buf, 128, "➸ Pressed : btn VN:%u", pressed_cnt++);
+    writeln((GFXfont *)&FiraSans, buf, &cursor_x, &cursor_y, NULL);
+    epd_poweroff_all();
 }
+
 
 
 void setup()
@@ -127,7 +143,7 @@ void setup()
     * Only as a test SdCard hardware, use example reference
     * https://github.com/espressif/arduino-esp32/tree/master/libraries/SD/examples
     */
-    SPI.begin(SD_SCLK, SD_SCLK, SD_MOSI, SD_CS);
+    SPI.begin(SD_SCLK, SD_MISO, SD_MOSI);
     bool rlst = SD.begin(SD_CS, SPI);
     if (!rlst) {
         Serial.println("SD init failed");
@@ -154,7 +170,6 @@ void setup()
         Serial.printf("eFuse Vref: %umV\r\n", adc_chars.vref);
         vref = adc_chars.vref;
     }
-
 
     framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
     if (!framebuffer) {
@@ -235,48 +250,50 @@ void setup()
 
 #endif
 
-    FontProperties props = {
-        .fg_color = 15,
-        .bg_color = 0,
-        .fallback_glyph = 0,
-        .flags = 0
-    };
+    if (touchOnline) {
 
-    // Draw button
-    int32_t x = 18;
-    int32_t y = 50;
-    epd_fill_rect(10, 10, 80, 80, 0x0000, framebuffer);
-    write_mode((GFXfont *)&FiraSans, "A", &x, &y, framebuffer, WHITE_ON_BLACK, &props);
+        FontProperties props = {
+            .fg_color = 15,
+            .bg_color = 0,
+            .fallback_glyph = 0,
+            .flags = 0
+        };
 
-    x = EPD_WIDTH - 72;
-    y = 50;
-    epd_fill_rect(EPD_WIDTH - 80, 10, 80, 80, 0x0000, framebuffer);
-    write_mode((GFXfont *)&FiraSans, "B", &x, &y, framebuffer, WHITE_ON_BLACK, &props);
+        // Draw button
+        int32_t x = 18;
+        int32_t y = 50;
+        epd_fill_rect(10, 10, 80, 80, 0x0000, framebuffer);
+        write_mode((GFXfont *)&FiraSans, "A", &x, &y, framebuffer, WHITE_ON_BLACK, &props);
 
-    x = 18;
-    y = EPD_HEIGHT - 30;
-    epd_fill_rect(10, EPD_HEIGHT - 80, 80, 80, 0x0000, framebuffer);
-    write_mode((GFXfont *)&FiraSans, "C", &x, &y, framebuffer, WHITE_ON_BLACK, &props);
+        x = EPD_WIDTH - 72;
+        y = 50;
+        epd_fill_rect(EPD_WIDTH - 80, 10, 80, 80, 0x0000, framebuffer);
+        write_mode((GFXfont *)&FiraSans, "B", &x, &y, framebuffer, WHITE_ON_BLACK, &props);
 
-    x = EPD_WIDTH - 72;
-    y = EPD_HEIGHT - 30;
-    epd_fill_rect(EPD_WIDTH - 80, EPD_HEIGHT - 80, 80, 80, 0x0000, framebuffer);
-    write_mode((GFXfont *)&FiraSans, "D", &x, &y, framebuffer, WHITE_ON_BLACK, &props);
+        x = 18;
+        y = EPD_HEIGHT - 30;
+        epd_fill_rect(10, EPD_HEIGHT - 80, 80, 80, 0x0000, framebuffer);
+        write_mode((GFXfont *)&FiraSans, "C", &x, &y, framebuffer, WHITE_ON_BLACK, &props);
+
+        x = EPD_WIDTH - 72;
+        y = EPD_HEIGHT - 30;
+        epd_fill_rect(EPD_WIDTH - 80, EPD_HEIGHT - 80, 80, 80, 0x0000, framebuffer);
+        write_mode((GFXfont *)&FiraSans, "D", &x, &y, framebuffer, WHITE_ON_BLACK, &props);
 
 
-    x = EPD_WIDTH / 2 - 55;
-    y = EPD_HEIGHT - 30;
-    epd_draw_rect(EPD_WIDTH / 2 - 60, EPD_HEIGHT - 80, 120, 75, 0x0000, framebuffer);
-    write_mode((GFXfont *)&FiraSans, "Sleep", &x, &y, framebuffer, WHITE_ON_BLACK, NULL);
+        x = EPD_WIDTH / 2 - 55;
+        y = EPD_HEIGHT - 30;
+        epd_draw_rect(EPD_WIDTH / 2 - 60, EPD_HEIGHT - 80, 120, 75, 0x0000, framebuffer);
+        write_mode((GFXfont *)&FiraSans, "Sleep", &x, &y, framebuffer, WHITE_ON_BLACK, NULL);
 
-    epd_draw_grayscale_image(epd_full_screen(), framebuffer);
-    
+        epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+
+    }
 
     epd_poweroff();
 
 
-    btn1.setPressedHandler(buttonPressed);
-    btn2.setPressedHandler(buttonPressed);
+    btn.setPressedHandler(buttonPressed);
 
 }
 
@@ -430,8 +447,7 @@ void loop()
         }
     }
 
-    btn1.loop();
-    btn2.loop();
+    btn.loop();
 
     delay(2);
 }
