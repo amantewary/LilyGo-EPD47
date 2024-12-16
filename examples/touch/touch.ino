@@ -12,7 +12,7 @@
  *                  PSRAM:"OPI PSRAM"
  *                  Upload Mode:"UART0/Hardware CDC"
  *                  USB Mode:"Hardware CDC and JTAG"
- *  
+ *
  */
 
 #ifndef BOARD_HAS_PSRAM
@@ -73,6 +73,7 @@ Rect_t area1 = {
     .height =  EPD_HEIGHT / 2 + 80
 };
 uint8_t state = 1;
+uint32_t touch_loop_interval = 0;
 
 void setup()
 {
@@ -162,6 +163,9 @@ void setup()
 
     epd_poweroff();
 
+
+    // Set the initial touch interval value
+    touch_loop_interval = millis() + 300;
 }
 
 
@@ -169,6 +173,13 @@ int16_t  x, y;
 
 void loop()
 {
+
+    // Limit the touch detection interval and detect the touch status every 300ms
+    // https://github.com/Xinyuan-LilyGO/LilyGo-EPD47/issues/143
+    if (millis()  < touch_loop_interval) {
+        return;
+    }
+
     uint8_t touched = touch.getPoint(&x, &y);
     if (touched) {
         // Serial.printf("X:%d Y:%d\n", x, y);

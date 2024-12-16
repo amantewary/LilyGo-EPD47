@@ -60,6 +60,7 @@ bool touchOnline = false;
 uint32_t interval = 0;
 int vref = 1100;
 char buf[128];
+uint32_t touch_loop_interval = 0;
 
 struct _point {
     uint8_t buttonID;
@@ -292,8 +293,11 @@ void setup()
 
     epd_poweroff();
 
-
+    // Set the button callback function
     btn.setPressedHandler(buttonPressed);
+
+    // Set the initial touch interval value
+    touch_loop_interval = millis() + 300;
 
 }
 
@@ -356,6 +360,12 @@ void loop()
 
 
     if (touchOnline) {
+
+        // Limit the touch detection interval and detect the touch status every 300ms
+        // https://github.com/Xinyuan-LilyGO/LilyGo-EPD47/issues/143
+        if (millis()  < touch_loop_interval) {
+            return;
+        }
         int16_t  x, y;
 
         if (!digitalRead(TOUCH_INT)) {
@@ -445,6 +455,7 @@ void loop()
              */
             epd_poweroff_all();
         }
+        touch_loop_interval = millis() + 300;
     }
 
     btn.loop();
