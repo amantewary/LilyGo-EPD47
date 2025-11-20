@@ -183,7 +183,7 @@ export default function SettingsPage() {
                   type="text"
                   {...register('host', { required: true })}
                   className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-epd-black"
-                  placeholder="192.168.2.46"
+                  placeholder="192.168.1.100 or homeassistant.local"
                 />
                 {errors.host && (
                   <span className="text-red-500 text-sm">Host is required</span>
@@ -366,7 +366,7 @@ export default function SettingsPage() {
                   type="text"
                   {...register('ip', { required: true })}
                   className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-epd-black"
-                  placeholder="192.168.2.89"
+                  placeholder="192.168.1.101"
                 />
                 {errors.ip && (
                   <span className="text-red-500 text-sm">Device IP is required</span>

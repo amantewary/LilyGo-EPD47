@@ -10,11 +10,11 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - HA_HOST=${HA_HOST:-192.168.2.46}
+      - HA_HOST=${HA_HOST}
       - HA_PORT=${HA_PORT:-8123}
       - HA_TOKEN=${HA_TOKEN}
-      - OTA_DEVICE_IP=${OTA_DEVICE_IP:-192.168.2.89}
-      - OTA_PASSWORD=${OTA_PASSWORD:-epd47ota}
+      - OTA_DEVICE_IP=${OTA_DEVICE_IP}
+      - OTA_PASSWORD=${OTA_PASSWORD}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
