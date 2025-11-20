@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  epd47-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: epd47-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - HA_HOST=${HA_HOST:-192.168.2.46}
+      - HA_PORT=${HA_PORT:-8123}
+      - HA_TOKEN=${HA_TOKEN}
+      - OTA_DEVICE_IP=${OTA_DEVICE_IP:-192.168.2.89}
+      - OTA_PASSWORD=${OTA_PASSWORD:-epd47ota}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
