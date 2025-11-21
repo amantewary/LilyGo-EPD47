@@ -3,3 +3,5 @@
 test
 build
 secrets.h
+examples/ha_calendar/config.h
+.platformio_env

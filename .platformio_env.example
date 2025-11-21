@@ -1,0 +1,21 @@
+# PlatformIO Environment Variables Template
+# 
+# Copy this file to .platformio_env and update with your values:
+#   cp .platformio_env.example .platformio_env
+#
+# .platformio_env is NOT tracked by git (see .gitignore)
+# This keeps your IP address and OTA password private.
+#
+# The extra_scripts/load_env.py script automatically loads these values
+# when building/uploading with the T5-ePaper-S3-OTA environment.
+
+# OTA Upload Configuration
+# 
+# Your device's IP address - get this from serial monitor after first USB upload
+# Look for "IP address: x.x.x.x" in the serial output
+OTA_IP=192.168.1.100
+
+# OTA password - must match ArduinoOTA.setPassword() in ha_calendar.ino
+# Default is "epd47ota" - change both places if you modify it
+OTA_PASSWORD=epd47ota
+
