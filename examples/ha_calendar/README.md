@@ -1,31 +1,66 @@
-## Custom Desk Dashboard Firmware
+## Home Assistant Dashboard for LilyGo EPD47
 
-This repository also contains a custom firmware sketch that turns the LilyGo EPD47 into a Home Assistant-powered desk dashboard. It displays a clock, upcoming calendar events from multiple calendars, and is designed to later include weather and to-do information.
+A comprehensive e-paper dashboard firmware that displays Home Assistant data on a 4.7" e-paper display.
 
-### Project Overview
+### Features
 
-- Target board: **T5-ePaper-S3 (ESP32-S3, 4.7" EPD, 960x540)**  
-- Firmware written in C++ using Arduino core / PlatformIO  
-- Uses the LilyGo EPD47 driver (`epd_driver.h`)  
-- Talks to Home Assistant over its REST API  
-- Optimized for partial refresh (minimal flashing and ghosting)
+- **Real-time Clock & Date** - 12-hour format, updates every minute
+- **Weather Display** - Temperature and condition with weather icons
+- **Daily Motivational Quotes** - Rotated every 3 hours from Home Assistant sensor
+- **Todo List** - Shows tasks due today from multiple todo entities
+- **Upcoming Calendar Events** - Displays next 7 days of events from multiple calendars
+- **Mini Calendar** - Compact week view with today highlighted
+- **WiFi Status Indicator** - Visual connection status
+- **Battery Indicator** - Shows battery percentage and charging status
+- **OTA Updates** - Over-the-air firmware updates via WiFi (no USB cable needed!)
 
-### Home Assistant Integration
+### Hardware Requirements
 
-The firmware pulls data from Home Assistant entities exposed via the REST API, for example:
+- **Board**: LilyGo T5-ePaper-S3 (ESP32-S3, 4.7" EPD, 960x540)
+- **Framework**: Arduino/PlatformIO
+- **PSRAM**: Required (OPI PSRAM)
 
-- A clock sensor (e.g. `sensor.desk_clock_line`) with a formatted timestamp string  
-- One or more calendar entities (e.g. `calendar.aman_outlook_calendar`, `calendar.home_2`)  
-- Optional aggregated “desk event” sensors (e.g. `sensor.desk_event_line_1/2/3`) that combine multiple calendars into a sorted list
+### Project Structure
 
-All the heavy logic (merging calendars, formatting strings, time zone handling, etc.) is done in Home Assistant using Jinja2 templates.  
-The EPD47 sketch just calls the HA REST API, reads the sensor states as strings, and renders them in fixed regions.
+```
+LilyGo-EPD47/
+├── .platformio_env          # OTA config (NOT in git) - create from .platformio_env.example
+├── .platformio_env.example  # Template for .platformio_env
+├── extra_scripts/
+│   └── load_env.py          # Script to load .platformio_env for OTA
+├── platformio.ini           # PlatformIO configuration
+└── examples/ha_calendar/
+    ├── ha_calendar.ino      # Main firmware
+    ├── secrets.h             # Your credentials (NOT in git)
+    ├── secrets.example.h    # Template for secrets.h
+    ├── config.h             # Your entity IDs and timezone (NOT in git)
+    ├── config.example.h     # Template for config.h
+    ├── weather_icons.h      # Weather condition icons
+    ├── todo_icons.h         # Todo list icons
+    ├── calendar_icons.h     # Calendar icons
+    └── wifi_icons.h         # WiFi status icons
+```
 
-### Handling Secrets (Wi-Fi, HA Token, Host)
+### Setup Instructions
 
-To keep the repo safe for GitHub, secrets are **not** hard-coded in the main sketch. Instead, they live in a separate header that is *not* committed.
+#### 1. Install Dependencies
 
-Create a file named `secrets.h` alongside your sketch (e.g. `src/ha_calendar.ino`):
+This project uses PlatformIO. Install PlatformIO IDE or CLI, then:
+
+```bash
+cd /path/to/LilyGo-EPD47
+pio lib install
+```
+
+#### 2. Configure Secrets
+
+Create `secrets.h` from the template:
+
+```bash
+cp examples/ha_calendar/secrets.example.h examples/ha_calendar/secrets.h
+```
+
+Edit `secrets.h` with your credentials:
 
 ```cpp
 #pragma once
@@ -35,63 +70,213 @@ Create a file named `secrets.h` alongside your sketch (e.g. `src/ha_calendar.ino
 #define WIFI_PASSWORD  "YOUR_WIFI_PASSWORD"
 
 // Home Assistant
-#define HA_HOST_ADDR   "HOME_ASSISTANT_IP"   // or "homeassistant.local"
+#define HA_HOST_ADDR   "192.168.1.100"  // Your HA IP or "homeassistant.local"
 #define HA_PORT_NUM    8123
 
 // Long-lived access token from Home Assistant
 #define HA_TOKEN_VALUE "YOUR_LONG_LIVED_TOKEN_HERE"
 ```
-Then in the main .ino or .cpp file:
+
+**Important**: `secrets.h` is in `.gitignore` and will NOT be committed to git.
+
+#### 3. Configure Entities and Timezone
+
+Create `config.h` from the template:
+
+```bash
+cp examples/ha_calendar/config.example.h examples/ha_calendar/config.h
+```
+
+Edit `config.h` with your Home Assistant entity IDs and timezone:
 
 ```cpp
-#include "secrets.h"
+#pragma once
+
+// Weather entity
+#define ENTITY_WEATHER "weather.your_weather_entity"
+
+// Quote sensor (optional)
+#define ENTITY_QUOTE "sensor.quote_of_the_day"
+
+// Todo entities
+#define ENTITY_TODOS_COUNT 2
+#define ENTITY_TODO_1 "todo.your_todo_1"
+#define ENTITY_TODO_2 "todo.your_todo_2"
+
+// Calendar entities
+#define ENTITY_CALENDARS_COUNT 2
+#define ENTITY_CALENDAR_1 "calendar.your_calendar_1"
+#define ENTITY_CALENDAR_2 "calendar.your_calendar_2"
+
+// NTP Timezone Configuration
+#define NTP_SERVER "pool.ntp.org"
+#define GMT_OFFSET_SEC -18000   // UTC-5 (EST). Adjust for your timezone
+#define DAYLIGHT_OFFSET_SEC 3600 // 1 hour for DST
 ```
 
-Finally, add a .gitignore rule:
+**Important**: `config.h` is in `.gitignore` and will NOT be committed to git. This keeps your personal entity IDs private.
+
+#### 4. Configure OTA Updates (Optional but Recommended)
+
+To enable Over-The-Air (OTA) updates, create a `.platformio_env` file in the project root:
+
+```bash
+cp .platformio_env.example .platformio_env
 ```
-secrets.h
+
+Edit `.platformio_env` with your device's IP address and OTA password:
+
+```bash
+# PlatformIO Environment Variables
+# This file is NOT tracked by git - create your own from .platformio_env.example
+
+# OTA Upload Configuration
+OTA_IP=192.168.1.100  # Your device's IP address (will be set after first USB upload)
+OTA_PASSWORD=epd47ota  # OTA password (must match ArduinoOTA.setPassword() in ha_calendar.ino)
 ```
 
-### Vertical Orientation Notes
+**Important**: `.platformio_env` is in `.gitignore` and will NOT be committed to git. This keeps your IP address and OTA password private.
 
-The 4.7” panel is naturally landscape in hardware (960×540), but can be mounted vertically. Two rendering approaches exist:
+**Note**: The default OTA password is `epd47ota`. Change it in `ha_calendar.ino` (line ~1535) and update `.platformio_env` accordingly.
 
-1. Use native landscape coordinates and simply rotate the physical device.
-2. Implement a coordinate-transform wrapper to map portrait → landscape coordinates.
+#### 5. Build and Upload
 
-Your current firmware uses fixed rectangular draw areas (`Rect_t`) for:
+**First upload (via USB):**
+```bash
+pio run -e T5-ePaper-S3 -t upload
+```
 
-- Clock
-- Event line 1
-- Event line 2
-- Event line 3
+**Monitor serial output:**
+```bash
+pio device monitor
+```
 
-These zones are designed for clean partial refreshes and minimal ghosting.
+Look for the IP address in the serial output (e.g., `IP address: 192.168.1.100`)
 
-### Partial Refresh Behavior
+**Update `.platformio_env`** with the IP address you see in the serial monitor.
 
-The firmware uses partial updates (`epd_clear_area`) instead of full screen refreshes.
+#### 6. Upload Over WiFi (OTA)
 
-**Benefits**
+After configuring `.platformio_env`, you can update firmware over WiFi without a USB cable:
 
-- Faster updates (clock can refresh every minute).
-- Minimal flashing.
-- Lower power use.
-- Less ghosting buildup.
+```bash
+pio run -e T5-ePaper-S3-OTA -t upload
+```
 
-**Logic**
+The script `extra_scripts/load_env.py` automatically loads your IP and password from `.platformio_env`.
 
-- Clock only refreshes if the time string changed.
-- Calendar lines only refresh when Home Assistant returns updated strings.
-- No unnecessary redraws → longer panel life and consistent UI.
+### Home Assistant Setup
 
-### Future Enhancements
+#### Quote Sensor (Optional)
 
-Planned features:
+Create a sensor in Home Assistant to provide daily quotes:
 
-- 🌤 Weather summary from a `weather.*` entity.
-- 📝 To-do list using Home Assistant’s `todo.*` integration.
-- 🔋 Battery indicator using ADC.
-- 🔌 Deep sleep mode with timed wakeups.
-- 🖼 Improved text layout (wrapping, bold titles, ellipsizing).
-- 📡 Auto-rotate based on board orientation (IMU or manual config).
+```yaml
+sensor:
+  - platform: template
+    sensors:
+      quote_of_the_day:
+        friendly_name: "Quote of the Day"
+        value_template: "{{ states('sensor.quote_text') }}"
+        attributes:
+          quotes:
+            - text: "Quote 1 text"
+              author: "Author 1"
+            - text: "Quote 2 text"
+              author: "Author 2"
+```
+
+The firmware reads the `quotes` attribute and rotates through them every 3 hours.
+
+### Display Layout
+
+```
+┌─────────────────────────────────────────┐
+│  Time WiFi Bat Weather    Date         │  ← Top bar
+│                                         │
+│  Daily Motivational Quote              │  ← Quote section
+│  ─────────────────────────────────────  │
+│  TODO              UPCOMING            │
+│  ✓ Task 1         1/15 9:30           │
+│  > Task 2           Event Title        │
+│  > Task 3         1/16 14:00           │
+│                      Another Event     │
+│  ─────────────────────────────────────  │
+│  S  M  T  W  T  F  S                   │  ← Mini calendar
+│  14 15 16 17 18 19 20                  │
+└─────────────────────────────────────────┘
+```
+
+### Update Intervals
+
+- **Clock**: Every 1 minute
+- **Date**: Once per day (at midnight)
+- **Weather**: Every 1 hour
+- **Todo & Calendar**: Every 1 hour
+- **Quotes**: Rotated every 3 hours, fetched once per day
+- **Battery**: Every 1 minute
+
+### Partial Refresh
+
+The firmware uses partial screen updates for:
+- Faster updates
+- Minimal flashing
+- Lower power consumption
+- Reduced ghosting
+
+Only changed sections are redrawn (e.g., clock updates don't refresh the entire screen).
+
+### Troubleshooting
+
+**WiFi not connecting:**
+- Check `secrets.h` credentials
+- Verify WiFi network is 2.4GHz (ESP32 doesn't support 5GHz)
+
+**No data displayed:**
+- Check serial monitor for API errors
+- Verify Home Assistant entity IDs are correct
+- Ensure HA token has proper permissions
+- Check HA is accessible from device's network
+
+**OTA upload fails:**
+- Verify device IP address is correct in `.platformio_env` (check serial monitor)
+- Check OTA password matches in code (`ha_calendar.ino`) and `.platformio_env`
+- Ensure `.platformio_env` file exists and is properly formatted (no extra spaces around `=`)
+- Ensure device is on the same WiFi network
+- Try USB upload first to ensure device is working
+- Check that `extra_scripts/load_env.py` is loading values (look for "Loaded: OTA_IP" in build output)
+
+**Display issues:**
+- Check serial monitor for errors
+- Verify PSRAM is enabled in board settings
+- Ensure display is properly connected
+
+**Battery not showing or incorrect:**
+- Ensure battery is properly connected to the board
+- Check serial monitor for battery voltage readings (look for "Battery: X.XXV (XX%)")
+- Battery reading requires `epd_poweron()` - the display must be powered when reading
+- If battery shows 0% or very low, check battery voltage with a multimeter
+- Charging detection is based on voltage threshold (≥4.15V) - may not be 100% accurate
+- Battery percentage calculation: 3.0V = 0%, 4.2V = 100% (typical LiPo range)
+
+**Power Management:**
+- **Battery Operation**: The board automatically runs on battery when USB-C is disconnected
+- **USB-C Charging**: When USB-C is connected, the board automatically:
+  - Switches to USB power (no interruption)
+  - Charges the battery (if connected)
+  - Continues normal operation
+- **Display Power**: The display is powered on only when updating (saves battery)
+- **No Manual Switching**: Power source switching is automatic - no code changes needed
+
+### Security Notes
+
+- **Never commit `secrets.h`** - It contains your WiFi password and HA token
+- **Never commit `config.h`** - It contains your personal entity IDs
+- **Never commit `.platformio_env`** - It contains your device IP and OTA password
+- **Change OTA password** - Default is `epd47ota`, change it for security
+- **Use long-lived tokens** - Create a token in HA with minimal required permissions
+- **Keep firmware updated** - OTA makes it easy to push security updates
+
+### License
+
+This firmware is part of the LilyGo EPD47 project. See main repository LICENSE file.
