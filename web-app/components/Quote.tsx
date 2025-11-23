@@ -22,14 +22,22 @@ export default function Quote({ quotes, currentIndex }: QuoteProps) {
   }
 
   const quoteText = `"${displayQuote.text}"`;
-  const truncatedText = quoteText.length > 90 
-    ? `${quoteText.substring(0, 87)}...`
-    : quoteText;
+  const maxLength = 120;
+  const truncatedText =
+    quoteText.length > maxLength
+      ? `${quoteText.substring(0, maxLength - 3)}...`
+      : quoteText;
 
   return (
-    <div className="text-base text-epd-black italic">
-      {truncatedText}
+    <div className="flex flex-col gap-1">
+      <div className="text-base text-epd-black italic leading-relaxed">
+        {truncatedText}
+      </div>
+      {displayQuote.author && (
+        <div className="text-xs text-epd-gray uppercase tracking-[0.12em]">
+          — {displayQuote.author}
+        </div>
+      )}
     </div>
   );
 }
-

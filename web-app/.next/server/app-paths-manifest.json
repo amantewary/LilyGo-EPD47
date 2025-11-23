@@ -1,3 +1,6 @@
 {
-  "/page": "app/page.js"
+  "/page": "app/page.js",
+  "/settings/page": "app/settings/page.js",
+  "/ota/page": "app/ota/page.js",
+  "/api/ota/build-upload/route": "app/api/ota/build-upload/route.js"
 }

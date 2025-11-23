@@ -128,10 +128,12 @@ The main dashboard (`/`) displays:
 ### OTA Updates
 
 1. Navigate to the OTA page (`/ota`)
-2. Select a firmware `.bin` file
-3. Click "Upload Firmware"
+2. Either select a firmware `.bin` file OR leave it empty to push the bundled firmware from the server
+3. Click "Update Now"
 4. Wait for the upload to complete (progress bar shown)
 5. Device will restart automatically
+
+Bundled firmware: by default the app looks for `../firmware/T5-ePaper-S3_demo_250901.bin` relative to `web-app`. Override with `DEFAULT_FIRMWARE_PATH=/absolute/path/to/your.bin` in the environment where the Next.js server runs.
 
 **Note**: Ensure the device is powered on and connected to WiFi before uploading.
 
@@ -252,4 +254,3 @@ These are optional and can be set as defaults. Configuration via the Settings pa
 ## License
 
 ISC
-

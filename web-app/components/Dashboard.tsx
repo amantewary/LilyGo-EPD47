@@ -173,42 +173,46 @@ export default function Dashboard({ config }: DashboardProps) {
   }
 
   return (
-    <div className="w-[960px] h-[540px] bg-epd-white p-5 flex flex-col relative overflow-hidden">
+    <div className="w-[960px] h-[540px] bg-epd-white p-6 flex flex-col gap-5 relative overflow-hidden border border-epd-gray/30 shadow-sm rounded-xl">
       {/* Top Header */}
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-start">
         <div className="flex items-center gap-4">
-          <Clock />
-          <div className="w-4 h-4 rounded-full bg-epd-black"></div>
+          <div className="flex items-center gap-3">
+            <Clock />
+            <div className="h-8 w-px bg-epd-gray/30" />
+          </div>
+          <div className="flex flex-col leading-tight">
+            <span className="text-[11px] tracking-[0.18em] text-epd-gray uppercase">Today</span>
+            <div className="text-lg font-semibold text-epd-black">{format(currentDate, 'EEE, MMM d')}</div>
+          </div>
         </div>
-        <Weather weather={data.weather} />
-        <div className="text-lg font-medium text-epd-black">
-          {format(currentDate, 'MMM d')}
+        <div className="px-4 py-3 rounded-lg border border-epd-gray/30 bg-white/60 shadow-inner min-w-[200px] flex justify-end">
+          <Weather weather={data.weather} />
         </div>
       </div>
 
       {/* Quote Section */}
-      <div className="mb-4 pb-2 border-b border-epd-gray">
+      <div className="rounded-lg border border-epd-gray/30 bg-white/70 px-4 py-3">
         <Quote quotes={data.quotes} currentIndex={data.currentQuoteIndex} />
       </div>
 
       {/* Middle Section - Todo and Calendar */}
-      <div className="flex gap-4 flex-1 mb-4">
-        <div className="w-[450px]">
+      <div className="flex gap-5 flex-1">
+        <div className="w-[450px] h-full rounded-lg border border-epd-gray/30 bg-white/70 px-4 py-3 shadow-sm">
           <TodoList todos={data.todos} />
         </div>
-        <div className="w-[450px]">
+        <div className="w-[450px] h-full rounded-lg border border-epd-gray/30 bg-white/70 px-4 py-3 shadow-sm">
           <CalendarEvents events={data.calendarEvents} />
         </div>
       </div>
 
       {/* Divider */}
-      <div className="border-t border-epd-gray mb-2"></div>
-
-      {/* Mini Calendar */}
-      <div className="h-[45px]">
-        <MiniCalendar />
+      <div className="border-t border-epd-gray/40 pt-3">
+        {/* Mini Calendar */}
+        <div className="h-[50px]">
+          <MiniCalendar />
+        </div>
       </div>
     </div>
   );
 }
-

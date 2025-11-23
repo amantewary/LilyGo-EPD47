@@ -1,23 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import FormData from 'form-data';
+import fs from 'fs';
+import path from 'path';
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    const firmware = formData.get('firmware') as File;
-    const deviceIp = formData.get('deviceIp') as string || process.env.OTA_DEVICE_IP || '';
-    const otaPassword = formData.get('otaPassword') as string || process.env.OTA_PASSWORD || '';
+    const firmware = formData.get('firmware') as File | null;
+    const useBundled = formData.get('useBundled') === 'true';
+    const deviceIp = (formData.get('deviceIp') as string) || process.env.OTA_DEVICE_IP || '';
+    const otaPassword = (formData.get('otaPassword') as string) || process.env.OTA_PASSWORD || '';
 
-    if (!firmware || !deviceIp || !otaPassword) {
+    if ((!firmware && !useBundled) || !deviceIp || !otaPassword) {
       return NextResponse.json(
         { error: 'Missing required parameters' },
         { status: 400 }
       );
     }
 
-    // Convert File to Buffer
-    const firmwareBuffer = Buffer.from(await firmware.arrayBuffer());
+    // Resolve firmware buffer either from uploaded file or bundled binary on disk
+    let firmwareBuffer: Buffer;
+    if (firmware) {
+      firmwareBuffer = Buffer.from(await firmware.arrayBuffer());
+    } else {
+      // Default to bundled demo firmware in the repo (one level up from web-app)
+      const defaultFirmwarePath =
+        process.env.DEFAULT_FIRMWARE_PATH ||
+        path.join(process.cwd(), '..', 'firmware', 'T5-ePaper-S3_demo_250901.bin');
+
+      if (!fs.existsSync(defaultFirmwarePath)) {
+        return NextResponse.json(
+          { error: 'Bundled firmware not found on server. Provide a .bin file instead.' },
+          { status: 500 }
+        );
+      }
+
+      firmwareBuffer = fs.readFileSync(defaultFirmwarePath);
+    }
 
     // Create form data for ArduinoOTA
     const uploadFormData = new FormData();
@@ -58,4 +78,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

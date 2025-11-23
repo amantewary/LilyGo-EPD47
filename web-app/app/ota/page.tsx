@@ -11,6 +11,11 @@ export default function OTAPage() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [buildLog, setBuildLog] = useState('');
+  const [buildRunning, setBuildRunning] = useState(false);
+  const [buildError, setBuildError] = useState<string | null>(null);
+  const [buildSuccess, setBuildSuccess] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -19,12 +24,67 @@ export default function OTAPage() {
     }
   };
 
-  const handleUpload = async () => {
-    if (!file) {
-      setError('Please select a firmware file');
+  const appendLog = (text: string) => {
+    setBuildLog((prev) => prev + text);
+  };
+
+  const handleBuildAndUpload = async () => {
+    const savedConfig = localStorage.getItem('epd47-config');
+    if (!savedConfig) {
+      setBuildError('Please configure device settings first');
       return;
     }
 
+    try {
+      const config = JSON.parse(savedConfig);
+      if (!config.ip || !config.otaPassword) {
+        setBuildError('Device IP and OTA password must be configured');
+        return;
+      }
+
+      setBuildRunning(true);
+      setBuildError(null);
+      setBuildSuccess(false);
+      setBuildLog('');
+
+      const response = await fetch('/api/ota/build-upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          deviceIp: config.ip,
+          otaPassword: config.otaPassword,
+        }),
+      });
+
+      if (!response.body) {
+        throw new Error('No response stream from server');
+      }
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Build/Upload failed');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          appendLog(decoder.decode(value));
+        }
+      }
+
+      setBuildSuccess(true);
+    } catch (err: any) {
+      setBuildError(err.message || 'Build/Upload failed');
+    } finally {
+      setBuildRunning(false);
+    }
+  };
+
+  const handleUpload = async () => {
     const savedConfig = localStorage.getItem('epd47-config');
     if (!savedConfig) {
       setError('Please configure device settings first');
@@ -42,11 +102,17 @@ export default function OTAPage() {
       setError(null);
       setSuccess(false);
       setProgress(0);
+      setStatusMessage(null);
 
       const formData = new FormData();
-      formData.append('firmware', file);
+      if (file) {
+        formData.append('firmware', file);
+      }
       formData.append('deviceIp', config.ip);
       formData.append('otaPassword', config.otaPassword);
+      if (!file) {
+        formData.append('useBundled', 'true');
+      }
 
       const response = await axios.post('/api/ota/update', formData, {
         headers: {
@@ -62,6 +128,7 @@ export default function OTAPage() {
         },
       });
 
+      setStatusMessage('Firmware sent. Device will restart after flashing.');
       setSuccess(true);
       setTimeout(() => {
         router.push('/');
@@ -87,26 +154,32 @@ export default function OTAPage() {
         {success && (
           <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded">
             Firmware uploaded successfully! The device will restart automatically.
+            {statusMessage && <div className="text-sm mt-1">{statusMessage}</div>}
           </div>
         )}
 
         <div className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium mb-2 text-epd-black">
-              Select Firmware File (.bin)
-            </label>
-            <input
-              type="file"
-              accept=".bin"
-              onChange={handleFileChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-epd-black"
-              disabled={uploading}
-            />
-            {file && (
-              <div className="mt-2 text-sm text-epd-gray">
-                Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
-              </div>
-            )}
+          <div className="flex flex-col gap-3">
+            <div>
+              <label className="block text-sm font-medium mb-2 text-epd-black">
+                Select Firmware File (.bin) — optional if using bundled firmware
+              </label>
+              <input
+                type="file"
+                accept=".bin"
+                onChange={handleFileChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-epd-black"
+                disabled={uploading}
+              />
+              {file && (
+                <div className="mt-2 text-sm text-epd-gray">
+                  Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                </div>
+              )}
+            </div>
+            <div className="text-sm text-epd-gray">
+              If you skip selecting a file, the app will push the bundled demo firmware from the server.
+            </div>
           </div>
 
           {uploading && (
@@ -124,10 +197,10 @@ export default function OTAPage() {
           <div className="flex gap-4">
             <button
               onClick={handleUpload}
-              disabled={!file || uploading}
+              disabled={uploading}
               className="px-6 py-2 bg-epd-black text-white rounded hover:bg-epd-gray disabled:opacity-50"
             >
-              {uploading ? 'Uploading...' : 'Upload Firmware'}
+              {uploading ? 'Uploading...' : 'Update Now'}
             </button>
             <button
               onClick={() => router.push('/')}
@@ -135,6 +208,52 @@ export default function OTAPage() {
             >
               Cancel
             </button>
+          </div>
+
+          <div className="border-t border-gray-200 pt-6 mt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold text-epd-black">Build & Upload (PlatformIO)</h2>
+              <span className="text-xs text-epd-gray">Requires PlatformIO on the server</span>
+            </div>
+
+            {buildError && (
+              <div className="mb-3 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                {buildError}
+              </div>
+            )}
+            {buildSuccess && (
+              <div className="mb-3 p-3 bg-green-100 border border-green-400 text-green-700 rounded">
+                Build & upload completed.
+              </div>
+            )}
+
+            <div className="flex gap-3 mb-3">
+              <button
+                onClick={handleBuildAndUpload}
+                disabled={buildRunning}
+                className="px-5 py-2 bg-epd-black text-white rounded hover:bg-epd-gray disabled:opacity-50"
+              >
+                {buildRunning ? 'Running…' : 'Build & Upload'}
+              </button>
+              <button
+                onClick={() => {
+                  setBuildLog('');
+                  setBuildError(null);
+                  setBuildSuccess(false);
+                }}
+                className="px-5 py-2 bg-gray-200 text-epd-black rounded hover:bg-gray-300"
+              >
+                Clear Log
+              </button>
+            </div>
+
+            <div className="bg-black text-green-200 rounded-md p-3 h-60 overflow-auto text-xs font-mono border border-gray-800">
+              {buildLog.trim().length === 0 ? (
+                <div className="text-gray-400">Logs will appear here when you run Build & Upload.</div>
+              ) : (
+                <pre className="whitespace-pre-wrap break-words">{buildLog}</pre>
+              )}
+            </div>
           </div>
 
           <div className="text-sm text-epd-gray mt-4">
@@ -151,4 +270,3 @@ export default function OTAPage() {
     </div>
   );
 }
-

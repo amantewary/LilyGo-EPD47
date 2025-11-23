@@ -48,7 +48,10 @@ export default function CalendarEvents({ events }: CalendarEventsProps) {
   if (events.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        <h2 className="text-lg font-semibold mb-4 text-epd-black">UPCOMING</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs font-semibold tracking-[0.2em] text-epd-gray uppercase">Upcoming</h2>
+          <div className="h-px flex-1 ml-3 bg-epd-gray/30" />
+        </div>
         <div className="text-sm text-epd-gray">No upcoming events</div>
       </div>
     );
@@ -56,26 +59,30 @@ export default function CalendarEvents({ events }: CalendarEventsProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 mb-4">
-        <h2 className="text-lg font-semibold text-epd-black">UPCOMING</h2>
+      <div className="flex items-center gap-2 mb-3">
+        <h2 className="text-xs font-semibold tracking-[0.2em] text-epd-gray uppercase">Upcoming</h2>
         {minutesUntilNext !== null && minutesUntilNext >= 0 && (
-          <span className="text-xs text-epd-gray">
-            {formatCountdown(minutesUntilNext)}
-          </span>
+          <span className="text-[11px] text-epd-gray">{formatCountdown(minutesUntilNext)}</span>
         )}
+        <div className="h-px flex-1 ml-2 bg-epd-gray/30" />
       </div>
-      <div className="flex flex-col gap-3 overflow-y-auto">
+      <div className="flex flex-col gap-3 overflow-y-auto pr-1">
         {events.map((event, index) => {
           const compactDate = event.date.replace(/^0+/, '').replace(/-/g, '/');
           const compactTime = event.startTime.replace(/^0+/, '');
           
           return (
-            <div key={index} className="flex flex-col">
-              <div className="text-xs text-epd-gray">
-                {compactDate} {compactTime}
-              </div>
-              <div className="text-sm text-epd-black pl-2">
-                {event.title.length > 28 ? `${event.title.substring(0, 25)}...` : event.title}
+            <div key={index} className="flex flex-col gap-1 pb-2 border-b border-epd-gray/30 last:border-b-0 last:pb-0">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-1 bg-epd-gray/50 rounded-full" />
+                <div className="flex flex-col leading-tight">
+                  <div className="text-xs text-epd-gray">
+                    {compactDate} {compactTime}
+                  </div>
+                  <div className="text-sm text-epd-black">
+                    {event.title.length > 32 ? `${event.title.substring(0, 29)}...` : event.title}
+                  </div>
+                </div>
               </div>
             </div>
           );
@@ -84,4 +91,3 @@ export default function CalendarEvents({ events }: CalendarEventsProps) {
     </div>
   );
 }
-

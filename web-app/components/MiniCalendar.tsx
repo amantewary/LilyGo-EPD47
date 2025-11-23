@@ -10,9 +10,9 @@ export default function MiniCalendar() {
 
   return (
     <div className="flex flex-col">
-      <div className="flex justify-around mb-2">
+      <div className="flex justify-around mb-1">
         {dayLabels.map((label, index) => (
-          <div key={index} className="text-xs text-epd-gray w-12 text-center">
+          <div key={index} className="text-[11px] text-epd-gray w-12 text-center tracking-[0.12em] uppercase">
             {label}
           </div>
         ))}
@@ -25,10 +25,10 @@ export default function MiniCalendar() {
           return (
             <div
               key={index}
-              className={`w-12 h-8 flex items-center justify-center text-xs ${
+              className={`w-12 h-9 flex items-center justify-center text-sm rounded-md ${
                 isToday
-                  ? 'border border-epd-black text-epd-black font-semibold'
-                  : 'text-epd-black'
+                  ? 'border border-epd-black text-epd-black font-semibold shadow-inner bg-white'
+                  : 'text-epd-black border border-transparent'
               }`}
             >
               {dayNum}
@@ -39,4 +39,3 @@ export default function MiniCalendar() {
     </div>
   );
 }
-
