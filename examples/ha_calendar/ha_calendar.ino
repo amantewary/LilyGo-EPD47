@@ -49,6 +49,11 @@
 #include <cstring>
 #include <vector>
 
+// Shared JSON documents for Home Assistant responses
+// With ArduinoJson v7, JsonDocument manages capacity dynamically.
+static JsonDocument haDoc;       // Single-object responses (/api/states, service responses)
+static JsonDocument haArrayDoc;  // Larger array responses (calendar, quotes)
+
 // ---------- CONFIG ----------
 // WiFi (loaded from secrets.h, which is not committed to git)
 const char *ssid = WIFI_SSID;
@@ -162,12 +167,31 @@ struct QuoteData {
   String text;
 };
 
+// Battery data structure and constants
+struct BatteryData {
+  float voltage;
+  int percentage;
+  bool isCharging;
+};
+BatteryData batteryInfo = {0.0, 0, false};
+const unsigned long BATTERY_UPDATE_INTERVAL_MS =
+    10UL * 60UL * 1000UL; // Update every 10 minutes
+int vref = 1100;   // Reference voltage in mV (will be calibrated from eFuse if
+                   // available)
+
 // Global Data
 WeatherData currentWeather;
 std::vector<TodoItem> todoList;
 std::vector<CalendarEvent> calendarEvents;
 std::vector<QuoteData> quotes;
 int currentQuoteIndex = 0;
+
+// Initialize STL collections with reasonable reserved capacity to reduce heap fragmentation
+void initCollections() {
+  todoList.reserve(8);          // Tasks due today are usually small in number
+  calendarEvents.reserve(16);   // A week of events across calendars
+  quotes.reserve(64);           // Daily quotes cache
+}
 
 // ---------- Layout ----------
 // Screen is 960x540
@@ -258,17 +282,6 @@ unsigned long wifiLingerUntil = 0; // keep WiFi up briefly after fetches
 
 bool debugMode = false; // true when BUTTON_1 held at boot, keeps device awake for OTA/debug
 
-// Battery data structure and constants
-struct BatteryData {
-  float voltage;
-  int percentage;
-  bool isCharging;
-};
-BatteryData batteryInfo = {0.0, 0, false};
-const unsigned long BATTERY_UPDATE_INTERVAL_MS =
-    10UL * 60UL * 1000UL; // Update every 10 minutes
-int vref = 1100;   // Reference voltage in mV (will be calibrated from eFuse if
-                   // available)
 
 // ---------- WiFi helpers ----------
 void connectWiFi() {
@@ -416,9 +429,9 @@ void fetchWeather() {
   Serial.print("Weather URL: ");
   Serial.println(url);
 
-  JsonDocument doc;
+  haDoc.clear();
 
-  if (!fetchJson(url, doc)) {
+  if (!fetchJson(url, haDoc)) {
     Serial.println("ERROR: Weather fetch failed - fetchJson returned false");
     weatherFailCount++;
     return;
@@ -427,14 +440,14 @@ void fetchWeather() {
 
   Serial.println("Weather JSON fetched successfully");
 
-  const char *state = doc["state"];
+  const char *state = haDoc["state"];
 
   // Check if temperature exists and is valid
-  if (!doc["attributes"]["temperature"].is<float>()) {
+  if (!haDoc["attributes"]["temperature"].is<float>()) {
     Serial.println("WARNING: Temperature not found or invalid in JSON");
     currentWeather.temperature = "-- C";
   } else {
-    float temp = doc["attributes"]["temperature"];
+    float temp = haDoc["attributes"]["temperature"];
     float displayTemp = temp;
     const char *unit = " C";
     if (USE_FAHRENHEIT) {
@@ -461,9 +474,9 @@ void fetchQuotes() {
   Serial.print("Quote URL: ");
   Serial.println(url);
 
-  JsonDocument doc;
+  haArrayDoc.clear();
 
-  if (!fetchJson(url, doc)) {
+  if (!fetchJson(url, haArrayDoc)) {
     Serial.println("ERROR: Quote fetch failed - fetchJson returned false");
     quoteFailCount++;
     return;
@@ -475,9 +488,9 @@ void fetchQuotes() {
   quotes.clear();
 
   // Parse the quotes/entries array from attributes (accept both keys)
-  JsonArray entries = doc["attributes"]["quotes"].as<JsonArray>();
+  JsonArray entries = haArrayDoc["attributes"]["quotes"].as<JsonArray>();
   if (entries.isNull()) {
-    entries = doc["attributes"]["entries"].as<JsonArray>();
+    entries = haArrayDoc["attributes"]["entries"].as<JsonArray>();
   }
   if (entries.isNull()) {
     Serial.println("ERROR: No 'quotes' or 'entries' array found in attributes");
@@ -643,7 +656,7 @@ void fetchTodos() {
   }
 
   std::vector<TodoItem> newTodos;
-  JsonDocument doc; // Larger buffer for service response
+  haDoc.clear(); // Reuse shared document for service response
 
   for (const char *entity : ENTITY_TODOS) {
     String url = buildHaUrl(
@@ -652,9 +665,9 @@ void fetchTodos() {
     String payload = String("{\"entity_id\": \"") + entity +
                      "\", \"status\": \"needs_action\"}";
 
-    doc.clear();
+    haDoc.clear();
 
-    if (!fetchJsonPost(url, payload, doc))
+    if (!fetchJsonPost(url, payload, haDoc))
       continue;
 
     // Service response structure (with return_response=true):
@@ -666,7 +679,7 @@ void fetchTodos() {
     //   }
     // }
 
-    JsonArray items = doc["service_response"][entity]["items"];
+    JsonArray items = haDoc["service_response"][entity]["items"];
     if (items.isNull()) {
       continue;
     }
@@ -729,7 +742,7 @@ String getISOTime(time_t t) {
 void fetchCalendar() {
   Serial.println("=== fetchCalendar() called ===");
   std::vector<CalendarEvent> newEvents;
-  JsonDocument doc;
+  haArrayDoc.clear();
 
   // Get current time and end time (7 days later)
   time_t now;
@@ -763,9 +776,9 @@ void fetchCalendar() {
 
     Serial.print("Fetching Calendar URL: ");
     Serial.println(url);
-    doc.clear();
+    haArrayDoc.clear();
 
-    if (!fetchJson(url, doc)) {
+    if (!fetchJson(url, haArrayDoc)) {
       Serial.print("ERROR: Failed to fetch calendar: ");
       Serial.println(entity);
       Serial.print("URL was: ");
@@ -778,13 +791,13 @@ void fetchCalendar() {
     Serial.println(">>> fetchJson succeeded");
 
     // Check if we got valid calendar data
-    if (!doc.is<JsonArray>()) {
+    if (!haArrayDoc.is<JsonArray>()) {
       Serial.print("WARNING: Calendar response was not an array for entity: ");
       Serial.println(entity);
       Serial.print("Response type: ");
-      if (doc.is<JsonObject>()) {
+      if (haArrayDoc.is<JsonObject>()) {
         Serial.println("Object (unexpected)");
-        serializeJson(doc, Serial);
+        serializeJson(haArrayDoc, Serial);
         Serial.println();
       } else {
         Serial.println("Unknown");
@@ -796,8 +809,8 @@ void fetchCalendar() {
     Serial.println(entity);
 
     // The API returns a JSON Array of events directly
-    if (doc.is<JsonArray>()) {
-      JsonArray events = doc.as<JsonArray>();
+    if (haArrayDoc.is<JsonArray>()) {
+      JsonArray events = haArrayDoc.as<JsonArray>();
       Serial.print(">>> Found ");
       Serial.print(events.size());
       Serial.print(" events in ");
@@ -830,9 +843,9 @@ void fetchCalendar() {
       Serial.print("ERROR: Calendar response was not an array for ");
       Serial.println(entity);
       Serial.print("Response type: ");
-      if (doc.is<JsonObject>()) {
+      if (haArrayDoc.is<JsonObject>()) {
         Serial.println("Object");
-        serializeJson(doc, Serial);
+        serializeJson(haArrayDoc, Serial);
         Serial.println();
       } else {
         Serial.println("Unknown");
@@ -932,7 +945,7 @@ void drawTextDivider(int32_t x, int32_t y, int32_t width) {
 
 /**
  * Draw daily motivational quote on the display
- * Uses FiraSansMedium font, truncates if too long
+ * Uses FiraSansSmall font, truncates if too long
  * Clears quote area before drawing
  */
 void drawQuote() {
@@ -947,11 +960,12 @@ void drawQuote() {
   // Format quote text with quotes (no author)
   String quoteText = "\"" + currentQuote.text + "\"";
 
-  // Truncate quote if too long - quoteArea is 920px wide, FiraSansMedium is
-  // ~8-10px per char So max ~90-100 characters. Use 90 to be safe and leave
-  // margin
-  if (quoteText.length() > 90) {
-    quoteText = quoteText.substring(0, 87) + "...";
+  // Truncate quote if too long.
+  // With the smaller font we can fit more text, but extremely long quotes can still
+  // overrun the line, so keep a generous but safe limit.
+  const int MAX_QUOTE_CHARS = 110;
+  if (quoteText.length() > MAX_QUOTE_CHARS) {
+    quoteText = quoteText.substring(0, MAX_QUOTE_CHARS - 3) + "...";
   }
 
   Serial.print("Drawing quote: ");
@@ -963,10 +977,10 @@ void drawQuote() {
   epd_clear_area(quoteArea);
   int32_t cursor_x = quoteArea.x;
   int32_t cursor_y =
-      quoteArea.y + FiraSansMedium.advance_y + FiraSansMedium.descender;
+      quoteArea.y + FiraSansSmall.advance_y + FiraSansSmall.descender;
 
   // Draw quote text only
-  writeln((GFXfont *)&FiraSansMedium, quoteText.c_str(), &cursor_x, &cursor_y,
+  writeln((GFXfont *)&FiraSansSmall, quoteText.c_str(), &cursor_x, &cursor_y,
           NULL);
 }
 
@@ -1031,7 +1045,7 @@ void drawWiFiStatus(int32_t x, int32_t y) {
 
 /**
  * Read battery voltage and calculate percentage
- * Note: epd_poweron() must be called before reading battery voltage
+ * Note: This uses the ADC directly and does not depend on EPD power state.
  *
  * @return BatteryData struct with voltage, percentage, and charging status
  */
@@ -1106,8 +1120,8 @@ BatteryData readBattery() {
     Serial.println("V) - Check battery connection!");
   }
 
-// Charging detection no longer displayed
-bat.isCharging = false;
+  // Charging detection no longer displayed
+  bat.isCharging = false;
 
   return bat;
 }
@@ -1120,13 +1134,38 @@ time_t parseISODateTime(const String &isoStr) {
   if (isoStr.length() < 10)
     return 0;
 
-  struct tm timeinfo = {0};
-  // Parse YYYY-MM-DDTHH:MM:SS or YYYY-MM-DD
-  int year, month, day, hour = 0, minute = 0, second = 0;
+  // Work on a trimmed copy that strips timezone information (Z, +HH:MM, -HH:MM)
+  String trimmed = isoStr;
 
-  if (sscanf(isoStr.c_str(), "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour,
-             &minute, &second) >= 3 ||
-      sscanf(isoStr.c_str(), "%d-%d-%d", &year, &month, &day) >= 3) {
+  int tzPos = trimmed.indexOf('Z');
+  if (tzPos == -1) {
+    // Look for '+' or '-' only after the date portion (index > 10),
+    // to avoid matching the '-' in "YYYY-MM-DD"
+    for (int i = 10; i < (int)trimmed.length(); ++i) {
+      char c = trimmed.charAt(i);
+      if (c == '+' || c == '-') {
+        tzPos = i;
+        break;
+      }
+    }
+  }
+  if (tzPos > 10) {
+    trimmed = trimmed.substring(0, tzPos);
+  }
+
+  struct tm timeinfo = {0};
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+
+  // First try full datetime: YYYY-MM-DDTHH:MM:SS
+  int parsed = sscanf(trimmed.c_str(), "%d-%d-%dT%d:%d:%d",
+                      &year, &month, &day, &hour, &minute, &second);
+  if (parsed < 3) {
+    // Fallback to date-only: YYYY-MM-DD
+    hour = minute = second = 0;
+    parsed = sscanf(trimmed.c_str(), "%d-%d-%d", &year, &month, &day);
+  }
+
+  if (parsed >= 3) {
     timeinfo.tm_year = year - 1900;
     timeinfo.tm_mon = month - 1;
     timeinfo.tm_mday = day;
@@ -1135,6 +1174,7 @@ time_t parseISODateTime(const String &isoStr) {
     timeinfo.tm_sec = second;
     return mktime(&timeinfo);
   }
+
   return 0;
 }
 
@@ -1552,6 +1592,7 @@ void updateCalendarTodoSections() {
 
   // Update Todo List
   std::vector<String> todoLines;
+  todoLines.reserve(todoList.size() + 1);
   for (const auto &item : todoList) {
     String prefix = item.completed ? "X " : "> ";
     todoLines.push_back(prefix + item.text);
@@ -1566,6 +1607,7 @@ void updateCalendarTodoSections() {
 
   // Update Calendar Events
   std::vector<String> calLines;
+  calLines.reserve(calendarEvents.size() * 2 + 1); // two lines per event + fallback
   for (const auto &evt : calendarEvents) {
     String eventLine = evt.date + " " + evt.startTime + " - " + evt.title;
     if (eventLine.length() > 90) {
@@ -1633,6 +1675,7 @@ void drawDashboard() {
 
   // 4. Todo List (Left Half)
   std::vector<String> todoLines;
+  todoLines.reserve(todoList.size() + 1);
   for (const auto &item : todoList) {
     String prefix = item.completed ? "X " : "> ";
     String line = prefix + item.text;
@@ -1656,6 +1699,7 @@ void drawDashboard() {
   Serial.println(" events ===");
 
   std::vector<String> calLines;
+  calLines.reserve(calendarEvents.size() * 2 + 1); // two lines per event + fallback
   int eventIndex = 0;
   for (const auto &evt : calendarEvents) {
     Serial.print("Processing event #");
@@ -1859,6 +1903,9 @@ void setup() {
   epd_init();
   drawInitialScreen();
 
+  // Initialize STL collections for display data
+  initCollections();
+
   // Connect to WiFi
   connectWiFi();
 
@@ -1961,7 +2008,14 @@ void setup() {
  * Main loop - Handles periodic updates and OTA
  * Runs continuously, updating different sections at their configured intervals
  */
+// NOTE: In normal battery-optimized mode, the device enters deep sleep at the end of setup()
+// and loop() is never executed. loop() is only used when debugMode is true (BUTTON_1 held at boot)
+// to allow continuous OTA and live debugging.
 void loop() {
+  if (!debugMode) {
+    // In battery mode we should be in deep sleep; this is a safety guard.
+    return;
+  }
   // Handle OTA updates only when OTA window is active
   if (otaEnabled) {
     ArduinoOTA.handle();
