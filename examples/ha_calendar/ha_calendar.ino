@@ -30,6 +30,7 @@
 #include "config.h" // Entity configuration (not tracked by git)
 #include "epd_driver.h"
 #include "esp_adc_cal.h" // For ADC calibration
+#include "esp_sleep.h"
 #include "firasans.h"
 #include "firasans_medium.h"
 #include "firasans_small.h"
@@ -254,6 +255,8 @@ bool otaEnabled = false;
 unsigned long otaWindowEnds = 0;
 int lastButtonState = HIGH;
 unsigned long wifiLingerUntil = 0; // keep WiFi up briefly after fetches
+
+bool debugMode = false; // true when BUTTON_1 held at boot, keeps device awake for OTA/debug
 
 // Battery data structure and constants
 struct BatteryData {
@@ -994,6 +997,9 @@ void rotateQuote() {
 bool isWiFiConnected() { return (WiFi.status() == WL_CONNECTED); }
 
 void disableWiFiIfAllowed() {
+  // In debug mode, keep WiFi on so OTA and live debugging remain available
+  if (debugMode)
+    return;
   if (otaEnabled)
     return;
   if (millis() < wifiLingerUntil)
@@ -1799,6 +1805,17 @@ void setup() {
 
   pinMode(BUTTON_1, INPUT_PULLUP); // Button to open OTA window on demand
   lastButtonState = digitalRead(BUTTON_1);
+
+  // Decide mode at boot based on BUTTON_1 (held = debug/OTA mode, released = battery-optimized mode)
+  bool bootButtonPressed = (lastButtonState == LOW);
+  if (bootButtonPressed) {
+    debugMode = true;
+    Serial.println("Debug mode enabled (BUTTON_1 held at boot)");
+  } else {
+    debugMode = false;
+    Serial.println("Battery-optimized mode (BUTTON_1 not held at boot)");
+  }
+
   if (String(OTA_PASSWORD) == "CHANGE_ME_OTA_PASSWORD") {
     Serial.println("FATAL: OTA password is not set. Update OTA_PASSWORD_VALUE in secrets.h and OTA_PASSWORD in .platformio_env.");
     while (true) {
@@ -1912,11 +1929,32 @@ void setup() {
 
   // Initialize update timers after initial draw
   unsigned long now = millis();
-  lastWeatherUpdate = now;
-  lastCalTodoUpdate = now;
-  lastQuoteFetch = now;
-  lastQuoteRotation = now;
-  lastBatteryUpdate = now;
+  lastWeatherUpdate   = now;
+  lastCalTodoUpdate   = now;
+  lastQuoteFetch      = now;
+  lastQuoteRotation   = now;
+  lastBatteryUpdate   = now;
+
+  // Read battery once at the end of setup so we have up-to-date info
+  Serial.println("=== Battery-optimized mode: finalizing setup cycle ===");
+  batteryInfo = readBattery();
+  Serial.print("Battery: ");
+  Serial.print(batteryInfo.voltage, 3);
+  Serial.print("V (");
+  Serial.print(batteryInfo.percentage);
+  Serial.println("%)");
+
+  if (!debugMode) {
+    Serial.println("Battery mode active - entering deep sleep for 15 minutes.");
+    // Turn off WiFi before entering deep sleep
+    forceWifiOff();
+    // Configure wake-up timer: 15 minutes (15 * 60 * 1,000,000 microseconds)
+    esp_sleep_enable_timer_wakeup(15ULL * 60ULL * 1000000ULL);
+    Serial.println("Entering deep sleep now...");
+    esp_deep_sleep_start();
+  } else {
+    Serial.println("Debug/OTA mode active - staying awake and running loop().");
+  }
 }
 
 /**
@@ -1930,6 +1968,10 @@ void loop() {
     if (millis() > otaWindowEnds) {
       Serial.println("OTA window expired");
       otaEnabled = false;
+    } else {
+      // While OTA is active, skip the rest of the loop to avoid
+      // network activity or e-paper operations interfering with the upload.
+      return;
     }
   }
 
