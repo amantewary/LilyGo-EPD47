@@ -45,7 +45,6 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <algorithm>
-#include <cstring>
 #include <vector>
 
 // Shared JSON documents for Home Assistant responses
@@ -149,7 +148,6 @@ struct WeatherData {
 
 struct TodoItem {
   String text;
-  bool completed;
 };
 
 struct CalendarEvent {
@@ -168,9 +166,8 @@ struct QuoteData {
 struct BatteryData {
   float voltage;
   int percentage;
-  bool isCharging;
 };
-BatteryData batteryInfo = {0.0, 0, false};
+BatteryData batteryInfo = {0.0, 0};
 const unsigned long BATTERY_UPDATE_INTERVAL_MS =
     10UL * 60UL * 1000UL; // Update every 10 minutes
 int vref = 1100;   // Reference voltage in mV (will be calibrated from eFuse if
@@ -214,18 +211,8 @@ const Rect_t weatherArea = {.x = 820,
                             .y = 20,
                             .width = 120,
                             .height = 35}; // Weather in top right
-// const Rect_t dateArea = {.x = 420,
-//                          .y = 20,
-//                          .width = 120,
-//                          .height = 35}; // Unused slot (left empty)
 const Rect_t wifiStatusArea = {
     .x = 260, .y = 20, .width = 60, .height = 35}; // WiFi status between date and weather
-// const Rect_t batteryArea = {.x = 220,
-//                             .y = 20,
-//                             .width = 120,
-//                             .height = 35}; // (not drawn) battery indicator area
-
-// Quote Section - Between header and todo (full width, single line)
 const Rect_t quoteArea = {
     .x = 20,
     .y = 60,
@@ -266,10 +253,6 @@ unsigned long lastQuoteRotation = 0;
 unsigned long lastBatteryUpdate = 0;
 unsigned long lastMidnightCheck = 0;
 String currentDateString = ""; // Track current date for logging and comparisons
-// uint32_t weatherFailCount = 0;
-// uint32_t todoFailCount = 0;
-// uint32_t calFailCount = 0;
-// uint32_t quoteFailCount = 0;
 bool fullRefreshScheduled = false;
 int lastMidnightDay = -1;
 bool otaEnabled = false;
@@ -697,7 +680,6 @@ void fetchTodos() {
       if (due.length() >= 10 && due.substring(0, 10) == today) {
         TodoItem item;
         item.text = summary;
-        item.completed = false;
         newTodos.push_back(item);
       }
     }
@@ -708,9 +690,7 @@ void fetchTodos() {
     newTodos.resize(6);
   }
 
-  if (!newTodos.empty()) {
-    todoList = newTodos;
-  }
+  todoList = newTodos;
   disableWiFiIfAllowed();
 }
 
@@ -876,9 +856,7 @@ void fetchCalendar() {
   Serial.println(newEvents.size());
   Serial.println("=== fetchCalendar() complete ===");
 
-  if (!newEvents.empty()) {
-    calendarEvents = newEvents;
-  }
+  calendarEvents = newEvents;
   disableWiFiIfAllowed();
 }
 
@@ -930,9 +908,7 @@ void drawQuote() {
   // Format quote text with quotes (no author)
   String quoteText = "\"" + currentQuote.text + "\"";
 
-  // Truncate quote if too long.
-  // With the smaller font we can fit more text, but extremely long quotes can still
-  // overrun the line, so keep a generous but safe limit.
+// Truncate overly long quotes to avoid running off the right edge.
   const int MAX_QUOTE_CHARS = 110;
   if (quoteText.length() > MAX_QUOTE_CHARS) {
     quoteText = quoteText.substring(0, MAX_QUOTE_CHARS - 3) + "...";
@@ -1014,10 +990,10 @@ void drawWiFiStatus(int32_t x, int32_t y) {
 }
 
 /**
- * Read battery voltage and calculate percentage
- * Note: This uses the ADC directly and does not depend on EPD power state.
+ * Read battery voltage and calculate a rough percentage.
+ * Uses the ADC directly and does not depend on EPD power state.
  *
- * @return BatteryData struct with voltage, percentage, and charging status
+ * @return BatteryData struct with voltage and percentage.
  */
 BatteryData readBattery() {
   BatteryData bat;
@@ -1090,9 +1066,7 @@ BatteryData readBattery() {
     Serial.println("V) - Check battery connection!");
   }
 
-  // Charging detection no longer displayed
-  bat.isCharging = false;
-
+  // Charging detection no longer displayed; percentage is based solely on voltage.
   return bat;
 }
 
@@ -1215,12 +1189,9 @@ void drawMiniCalendar(int32_t x, int32_t y, int32_t width, int32_t height) {
     writeln((GFXfont *)&FiraSansSmall, label, &cursor_x, &cursor_y, NULL);
   }
 
-  // Draw day numbers for current week (7 days) - small font, bottom row
-  // Position below day labels with proper spacing to avoid overlap
-  // Area is y=490, height=50, so max y=540
-  // Day labels use ~30px (advance_y), so start numbers at y + 30 + spacing
+// Draw day numbers for current week (7 days) - small font, bottom row
   cursor_y = y + FiraSansSmall.advance_y +
-             18; // 18px gap between labels and numbers for better readability
+             18; // Gap between labels and numbers for readability
 
   for (int i = 0; i < 7; i++) {
     int day = startDay + i;
@@ -1229,9 +1200,6 @@ void drawMiniCalendar(int32_t x, int32_t y, int32_t width, int32_t height) {
 
     int32_t cursor_x =
         x + (i * dayWidth) + (dayWidth / 2) - 3; // Center day number
-
-    // Highlight today with a box border
-    bool isToday = (day == currentDay);
 
     // Draw day number
     const GFXfont *dayFont = (GFXfont *)&FiraSansSmall;
@@ -1242,26 +1210,6 @@ void drawMiniCalendar(int32_t x, int32_t y, int32_t width, int32_t height) {
   }
 }
 
-void drawText(const Rect_t &area, String text, bool alignRight = false) {
-  int32_t cursor_x = area.x;
-  int32_t cursor_y = area.y + FiraSans.advance_y + FiraSans.descender;
-
-  if (alignRight) {
-    // Simple right align estimation (not perfect without measuring)
-    // For now, let's just stick to left align or center if needed.
-    // Actually, let's just ignore alignRight for simplicity unless we
-    // measure text.
-  }
-
-  epd_clear_area(area);
-  // Truncate text if too long to prevent cutoff
-  String displayText = text;
-  if (displayText.length() > 60) { // Approximate max chars for weather area
-    displayText = displayText.substring(0, 57) + "...";
-  }
-  writeln((GFXfont *)&FiraSans, displayText.c_str(), &cursor_x, &cursor_y,
-          NULL);
-}
 
 void drawList(const Rect_t &area, const std::vector<String> &lines,
               String header, bool drawIcons = false, int lineSpacing = 35,
@@ -1504,12 +1452,13 @@ void updateCalendarTodoSections() {
   std::vector<String> todoLines;
   todoLines.reserve(todoList.size() + 1);
   for (const auto &item : todoList) {
-    String prefix = item.completed ? "X " : "> ";
+    // All items are treated as active/pending; completed state is not tracked.
+    String prefix = "> ";
     todoLines.push_back(prefix + item.text);
   }
 
   if (todoLines.empty()) {
-    todoLines.push_back("X Nothing due today");
+    todoLines.push_back("> Nothing due today");
   }
 
   drawList(todoListArea, todoLines, "TODO", true, 35, icon_todo_data,
@@ -1587,8 +1536,8 @@ void drawDashboard() {
   std::vector<String> todoLines;
   todoLines.reserve(todoList.size() + 1);
   for (const auto &item : todoList) {
-    String prefix = item.completed ? "X " : "> ";
-    String line = prefix + item.text;
+    // All todo items are rendered as active; completed state is not tracked.
+    String line = "> " + item.text;
     if (line.length() > 45) { // Reduced for half width
       line = line.substring(0, 42) + "...";
     }
@@ -1596,7 +1545,7 @@ void drawDashboard() {
   }
 
   if (todoLines.empty()) {
-    todoLines.push_back("Nothing due today");
+    todoLines.push_back("> Nothing due today");
   }
 
   drawList(todoListArea, todoLines, "TODO", true, 32, icon_todo_data,
@@ -1960,8 +1909,7 @@ void loop() {
 
   unsigned long now = millis();
   bool lowBatteryMode =
-      (!batteryInfo.isCharging && batteryInfo.percentage > 0 &&
-       batteryInfo.percentage < 20);
+      (batteryInfo.percentage > 0 && batteryInfo.percentage < 20);
   unsigned long weatherInterval =
       WEATHER_UPDATE_INTERVAL_MS * (lowBatteryMode ? 2 : 1);
   unsigned long calTodoInterval =
