@@ -25,7 +25,6 @@
 #error "Please enable PSRAM, Arduino IDE -> Tools -> PSRAM -> OPI PSRAM"
 #endif
 
-#include "battery_icons.h"
 #include "calendar_icons.h"
 #include "config.h" // Entity configuration (not tracked by git)
 #include "epd_driver.h"
@@ -146,8 +145,6 @@ const unsigned long OTA_WINDOW_MS = 5UL * 60UL * 1000UL; // OTA enabled for 5 mi
 struct WeatherData {
   String temperature;
   String condition;
-  String icon; // e.g., "mdi:weather-sunny" (we might just use condition text
-               // for now)
 };
 
 struct TodoItem {
@@ -217,16 +214,16 @@ const Rect_t weatherArea = {.x = 820,
                             .y = 20,
                             .width = 120,
                             .height = 35}; // Weather in top right
-const Rect_t dateArea = {.x = 420,
-                         .y = 20,
-                         .width = 120,
-                         .height = 35}; // Unused slot (left empty)
+// const Rect_t dateArea = {.x = 420,
+//                          .y = 20,
+//                          .width = 120,
+//                          .height = 35}; // Unused slot (left empty)
 const Rect_t wifiStatusArea = {
     .x = 260, .y = 20, .width = 60, .height = 35}; // WiFi status between date and weather
-const Rect_t batteryArea = {.x = 220,
-                            .y = 20,
-                            .width = 120,
-                            .height = 35}; // (not drawn) battery indicator area
+// const Rect_t batteryArea = {.x = 220,
+//                             .y = 20,
+//                             .width = 120,
+//                             .height = 35}; // (not drawn) battery indicator area
 
 // Quote Section - Between header and todo (full width, single line)
 const Rect_t quoteArea = {
@@ -269,10 +266,10 @@ unsigned long lastQuoteRotation = 0;
 unsigned long lastBatteryUpdate = 0;
 unsigned long lastMidnightCheck = 0;
 String currentDateString = ""; // Track current date for logging and comparisons
-uint32_t weatherFailCount = 0;
-uint32_t todoFailCount = 0;
-uint32_t calFailCount = 0;
-uint32_t quoteFailCount = 0;
+// uint32_t weatherFailCount = 0;
+// uint32_t todoFailCount = 0;
+// uint32_t calFailCount = 0;
+// uint32_t quoteFailCount = 0;
 bool fullRefreshScheduled = false;
 int lastMidnightDay = -1;
 bool otaEnabled = false;
@@ -433,10 +430,8 @@ void fetchWeather() {
 
   if (!fetchJson(url, haDoc)) {
     Serial.println("ERROR: Weather fetch failed - fetchJson returned false");
-    weatherFailCount++;
     return;
   }
-  weatherFailCount = 0;
 
   Serial.println("Weather JSON fetched successfully");
 
@@ -458,7 +453,6 @@ void fetchWeather() {
   }
 
   currentWeather.condition = state ? String(state) : "--";
-  currentWeather.icon = ""; // TODO: Map state to icon
 
   Serial.print("Weather condition: ");
   Serial.println(currentWeather.condition);
@@ -478,7 +472,6 @@ void fetchQuotes() {
 
   if (!fetchJson(url, haArrayDoc)) {
     Serial.println("ERROR: Quote fetch failed - fetchJson returned false");
-    quoteFailCount++;
     return;
   }
 
@@ -541,7 +534,6 @@ void fetchQuotes() {
 
   Serial.print("Total quotes stored: ");
   Serial.println(quotes.size());
-  quoteFailCount = 0;
 
   // Reset current quote index
   currentQuoteIndex = 0;
@@ -718,9 +710,6 @@ void fetchTodos() {
 
   if (!newTodos.empty()) {
     todoList = newTodos;
-    todoFailCount = 0;
-  } else {
-    todoFailCount++;
   }
   disableWiFiIfAllowed();
 }
@@ -784,7 +773,6 @@ void fetchCalendar() {
       Serial.print("URL was: ");
       Serial.println(url);
       Serial.println(">>> Moving to next calendar entity");
-      calFailCount++;
       continue;
     }
 
@@ -890,28 +878,10 @@ void fetchCalendar() {
 
   if (!newEvents.empty()) {
     calendarEvents = newEvents;
-    calFailCount = 0;
-  } else {
-    calFailCount++;
   }
   disableWiFiIfAllowed();
 }
 
-// Helper to get current time string from NTP
-String fetchTime() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    return "--:--";
-  }
-  char timeStringBuff[10];
-  if (USE_24H_TIME) {
-    strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo);
-  } else {
-    strftime(timeStringBuff, sizeof(timeStringBuff), "%I:%M",
-             &timeinfo); // 12-hour format (01-12)
-  }
-  return String(timeStringBuff);
-}
 
 // ---------- Icon Drawing Functions ----------
 // Draw bitmap icons using pre-defined data
@@ -1126,7 +1096,6 @@ BatteryData readBattery() {
   return bat;
 }
 
-bool enforceFullRefreshIfNeeded() { return false; }
 
 
 // Parse ISO datetime string to time_t
@@ -1198,66 +1167,7 @@ int getMinutesUntilNextEvent() {
   return -1; // No future events
 }
 
-// Get task completion stats
-void getTaskStats(int &completed, int &total) {
-  completed = 0;
-  total = todoList.size();
-  for (const auto &item : todoList) {
-    if (item.completed)
-      completed++;
-  }
-}
 
-// Draw a progress bar using a small framebuffer
-void drawProgressBar(int32_t x, int32_t y, int32_t width, int32_t height,
-                     float progress) {
-  // Clamp progress between 0 and 1
-  if (progress < 0)
-    progress = 0;
-  if (progress > 1)
-    progress = 1;
-
-  // Ensure minimum size
-  if (width < 4 || height < 4) {
-    Serial.println("Progress bar: size too small");
-    return;
-  }
-
-  // Limit size to prevent memory issues
-  if (width > 200 || height > 20) {
-    Serial.println("Progress bar: size too large");
-    return;
-  }
-
-  // Allocate small framebuffer for progress bar
-  size_t bufferSize = (width * height + 1) / 2; // Round up for odd pixel counts
-  uint8_t *barBuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), bufferSize);
-  if (!barBuffer) {
-    Serial.print("Progress bar: allocation failed, size=");
-    Serial.println(bufferSize);
-    return; // Skip if allocation fails
-  }
-
-  // Clear to white
-  memset(barBuffer, 0xFF, bufferSize);
-
-  // Draw border (coordinates relative to framebuffer, starting at 0,0)
-  Rect_t barArea = {.x = x, .y = y, .width = width, .height = height};
-  epd_draw_rect(0, 0, width, height, 0, barBuffer);
-
-  // Draw filled portion
-  int32_t fillWidth = (int32_t)(width * progress);
-  if (fillWidth > 2) {
-    epd_fill_rect(1, 1, fillWidth - 2, height - 2, 0, barBuffer);
-  }
-
-  // Draw the framebuffer to screen at position (x, y)
-  epd_draw_grayscale_image(barArea, barBuffer);
-
-  // Free framebuffer immediately
-  free(barBuffer);
-  barBuffer = NULL;
-}
 
 // Draw mini calendar month view - shows current week (compact with small font)
 void drawMiniCalendar(int32_t x, int32_t y, int32_t width, int32_t height) {
