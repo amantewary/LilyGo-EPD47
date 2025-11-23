@@ -16,6 +16,5 @@
 OTA_IP=192.168.1.100
 
 # OTA password - must match ArduinoOTA.setPassword() in ha_calendar.ino
-# Default is "epd47ota" - change both places if you modify it
-OTA_PASSWORD=epd47ota
-
+# Keep this in sync with OTA_PASSWORD_VALUE in examples/ha_calendar/secrets.h
+OTA_PASSWORD=CHANGE_ME_OTA_PASSWORD

@@ -8,3 +8,6 @@
 #define HA_PORT_NUM    8123
 
 #define HA_TOKEN_VALUE "YOUR_LONG_LIVED_TOKEN"
+
+// OTA password (must match OTA_PASSWORD in .platformio_env for uploads)
+#define OTA_PASSWORD_VALUE "CHANGE_ME_OTA_PASSWORD"

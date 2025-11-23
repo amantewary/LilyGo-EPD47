@@ -25,3 +25,10 @@
 #define GMT_OFFSET_SEC -18000   // UTC-5 (EST). Adjust for your timezone (UTC offset in seconds)
 #define DAYLIGHT_OFFSET_SEC 3600 // 1 hour for DST
 
+// Home Assistant connection
+// Set to 1 to use HTTPS (recommended if your HA is served over SSL)
+#define HA_USE_HTTPS 0
+
+// Display preferences
+#define USE_FAHRENHEIT 0 // Set to 1 to convert weather temperature to °F
+#define USE_24H_TIME 0   // Set to 1 for 24-hour clock

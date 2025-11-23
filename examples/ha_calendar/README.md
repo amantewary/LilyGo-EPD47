@@ -1,18 +1,22 @@
 ## Home Assistant Dashboard for LilyGo EPD47
 
-A comprehensive e-paper dashboard firmware that displays Home Assistant data on a 4.7" e-paper display.
+A low-power e-paper dashboard for the 4.7" T5-Epaper-S3, showing Home Assistant data with minimal refreshes.
 
 ### Features
 
-- **Real-time Clock & Date** - 12-hour format, updates every minute
-- **Weather Display** - Temperature and condition with weather icons
-- **Daily Motivational Quotes** - Rotated every 3 hours from Home Assistant sensor
-- **Todo List** - Shows tasks due today from multiple todo entities
-- **Upcoming Calendar Events** - Displays next 7 days of events from multiple calendars
-- **Mini Calendar** - Compact week view with today highlighted
-- **WiFi Status Indicator** - Visual connection status
-- **Battery Indicator** - Shows battery percentage and charging status
-- **OTA Updates** - Over-the-air firmware updates via WiFi (no USB cable needed!)
+- **Top bar:** Date (left), WiFi indicator, Weather (right). Clock removed to save refreshes.
+- **Quotes:** Rotated every 6 hours from a Home Assistant sensor.
+- **Todos & Calendar:** Tasks due today and next 7 days of events.
+- **Mini Calendar:** Compact week view with today highlighted.
+- **On-demand OTA:** Press the user button (GPIO21) to enable a 5-minute OTA window; WiFi stays off otherwise.
+
+### Update / Refresh cadence
+
+- Weather: hourly
+- Todo & Calendar: every 6 hours
+- Quotes: rotate every 6 hours; fetch new once per day
+- Full refresh: once at midnight (00:00)
+- WiFi: turned off after each fetch unless OTA window is active
 
 ### Hardware Requirements
 
@@ -137,7 +141,13 @@ OTA_PASSWORD=epd47ota  # OTA password (must match ArduinoOTA.setPassword() in ha
 
 **Important**: `.platformio_env` is in `.gitignore` and will NOT be committed to git. This keeps your IP address and OTA password private.
 
-**Note**: The default OTA password is `epd47ota`. Change it in `ha_calendar.ino` (line ~1535) and update `.platformio_env` accordingly.
+**Note**: The default OTA password is `epd47ota`. Change it in `ha_calendar.ino` and update `.platformio_env` accordingly.
+
+OTA usage in low-power mode:
+
+- After boot, OTA is enabled for a short window (5 minutes)
+- To re-enable OTA later, press the user button (GPIO21). This opens another 5-minute OTA window
+- Outside the OTA window, WiFi stays off to save battery
 
 #### 5. Build and Upload
 

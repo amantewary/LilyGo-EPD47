@@ -2,20 +2,20 @@
  * Home Assistant Dashboard for LilyGo EPD47
  *
  * A comprehensive e-paper dashboard that displays:
- * - Real-time clock and date
+ * - Date (top-left)
  * - Weather information with icons
- * - Daily motivational quotes (rotated every 3 hours)
+ * - Daily motivational quotes (rotated every 6 hours)
  * - Todo list items (due today)
  * - Upcoming calendar events (next 7 days)
  * - Mini calendar week view
  * - WiFi connection status
- * - Battery level indicator with percentage and charging status
+ * - Battery voltage logged (not drawn)
  *
  * Features:
  * - Partial refresh for fast updates and minimal flashing
- * - OTA (Over-The-Air) updates via WiFi
- * - Optimized refresh rates (clock every minute, data every hour)
- * - Beautiful UI with icons and proper typography
+ * - OTA (Over-The-Air) updates via WiFi; WiFi disabled between fetches unless OTA window is active
+ * - Optimized refresh rates (hourly weather, 6-hour quotes, 6-hour todo/calendar, midnight full refresh)
+ * - On-demand OTA window opened by BUTTON_1 (GPIO21) for 5 minutes
  *
  * Hardware: LilyGo T5-ePaper-S3 (ESP32-S3, 4.7" EPD, 960x540)
  * Framework: Arduino/PlatformIO
@@ -43,6 +43,7 @@
 #include <ArduinoOTA.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -55,9 +56,27 @@ const char *password = WIFI_PASSWORD;
 // Home Assistant (host/port loaded from secrets.h)
 const char *HA_HOST = HA_HOST_ADDR;
 const uint16_t HA_PORT = HA_PORT_NUM;
+// Use HTTPS to talk to Home Assistant (set in config.h; defaults to HTTP)
+#ifndef HA_USE_HTTPS
+#define HA_USE_HTTPS 0
+#endif
+
+// Optional output formats
+#ifndef USE_FAHRENHEIT
+#define USE_FAHRENHEIT 0
+#endif
+#ifndef USE_24H_TIME
+#define USE_24H_TIME 0
+#endif
 
 // Long-lived access token from HA (from secrets.h)
 const char *HA_TOKEN = HA_TOKEN_VALUE;
+
+// OTA password (keep private in secrets.h)
+#ifndef OTA_PASSWORD_VALUE
+#define OTA_PASSWORD_VALUE "CHANGE_ME_OTA_PASSWORD"
+#endif
+const char *OTA_PASSWORD = OTA_PASSWORD_VALUE;
 
 // HA entities (loaded from config.h, which is not committed to git)
 // These macros are used directly in the code - no need for const char*
@@ -109,14 +128,13 @@ const std::vector<const char *> ENTITY_CALENDARS = {
 // Update intervals (ms)
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 60UL * 60UL * 1000UL; // 1 hour
 const unsigned long CAL_TODO_UPDATE_INTERVAL_MS =
-    60UL * 60UL * 1000UL;                                     // 1 hour
-const unsigned long CLOCK_UPDATE_INTERVAL_MS = 60UL * 1000UL; // 1 minute
-const unsigned long DATE_UPDATE_INTERVAL_MS =
-    24UL * 60UL * 60UL * 1000UL; // 24 hours (once per day)
+    6UL * 60UL * 60UL * 1000UL; // 6 hours
 const unsigned long QUOTE_ROTATION_INTERVAL_MS =
-    3UL * 60UL * 60UL * 1000UL; // 3 hours
+    6UL * 60UL * 60UL * 1000UL; // 6 hours
 const unsigned long QUOTE_FETCH_INTERVAL_MS =
     24UL * 60UL * 60UL * 1000UL; // 24 hours (fetch new quotes once per day)
+const unsigned long MIDNIGHT_CHECK_INTERVAL_MS = 60UL * 1000UL; // check once per minute
+const unsigned long OTA_WINDOW_MS = 5UL * 60UL * 1000UL; // OTA enabled for 5 minutes after button press
 
 // ---------- Data Structures ----------
 struct WeatherData {
@@ -165,75 +183,77 @@ int currentQuoteIndex = 0;
 //   │  • Event 1 - Time                    │
 //   └──────────────────────────────────────┘
 
-// Top Header - Time, Weather, and Date (Screen: 960x540)
+// Top Header - Date, WiFi, Weather (Screen: 960x540)
 const Rect_t clockArea = {.x = 20,
                           .y = 20,
                           .width = 120,
-                          .height = 35}; // Clock in top left, very compact
-const Rect_t weatherArea = {.x = 420,
+                          .height = 35}; // Used for date display (clock removed)
+const Rect_t weatherArea = {.x = 820,
                             .y = 20,
                             .width = 120,
-                            .height = 35}; // Weather in top center, same size
-const Rect_t dateArea = {.x = 820,
+                            .height = 35}; // Weather in top right
+const Rect_t dateArea = {.x = 420,
                          .y = 20,
                          .width = 120,
-                         .height = 35}; // Date in top right, same size as clock
+                         .height = 35}; // Unused slot (left empty)
 const Rect_t wifiStatusArea = {
-    .x = 150, .y = 20, .width = 60, .height = 35}; // WiFi status next to clock
+    .x = 260, .y = 20, .width = 60, .height = 35}; // WiFi status between date and weather
 const Rect_t batteryArea = {.x = 220,
                             .y = 20,
                             .width = 120,
-                            .height = 35}; // Battery indicator next to WiFi
+                            .height = 35}; // (not drawn) battery indicator area
 
 // Quote Section - Between header and todo (full width, single line)
 const Rect_t quoteArea = {
     .x = 20,
-    .y = 65,
+    .y = 60,
     .width = 920,
-    .height = 40}; // Full width for daily quote (quote only, no author)
+    .height = 28}; // Full width for daily quote (quote only, no author)
 
 // Middle Section - Todo (left half) and UPCOMING Calendar (right half) side by
-// side Moved up since quote section is now smaller (no author) Calculating from
-// bottom: Screen is 540px tall Mini calendar: 50px at bottom (y=490 to y=540)
-// Divider needs ~15px space (y=475)
-// TODO/UPCOMING must end before divider, so max y=470
-// TODO/UPCOMING starts at y=160, so max height = 470 - 160 = 310px
+// side. Content spans roughly y=105..420 for tighter vertical fit.
 const Rect_t todoHeaderArea = {
-    .x = 20, .y = 115, .width = 450, .height = 40}; // Left half (moved up)
+    .x = 20, .y = 105, .width = 450, .height = 40}; // Left half
 const Rect_t todoListArea = {
     .x = 20,
-    .y = 160,
+    .y = 145,
     .width = 450,
-    .height = 280}; // Left half - calculated to end at y=440, leaving 30px
-                    // buffer before divider
+    .height = 290}; // Left half - ends near y=435, closer to divider
 const Rect_t calendarHeaderArea = {
-    .x = 490, .y = 115, .width = 450, .height = 40}; // Right half (moved up)
+    .x = 490, .y = 105, .width = 450, .height = 40}; // Right half
 const Rect_t calendarListArea = {
     .x = 490,
-    .y = 160,
+    .y = 145,
     .width = 450,
-    .height = 280}; // Right half - calculated to end at y=440, leaving 30px
-                    // buffer before divider
-
+    .height = 290}; // Right half - ends near y=435, closer to divider
 // Bottom Section - Mini Calendar (compact, full width)
 // Screen is 960x540, so we need to ensure it fits within bounds
 // Need enough height for 2 rows: day labels (~30px) + spacing + day numbers
 // (~30px) Positioned at bottom: y=490 to y=540 (50px height)
 const Rect_t miniCalendarArea = {
     .x = 20,
-    .y = 490,
+    .y = 470,
     .width = 920,
-    .height = 45}; // Compact mini calendar at bottom, moved up slightly
+    .height = 60}; // Compact mini calendar at bottom, fits within 540px
 
 // ---------- Globals ----------
 unsigned long lastWeatherUpdate = 0;
 unsigned long lastCalTodoUpdate = 0;
-unsigned long lastClockUpdate = 0;
-unsigned long lastDateUpdate = 0;
 unsigned long lastQuoteFetch = 0;
 unsigned long lastQuoteRotation = 0;
 unsigned long lastBatteryUpdate = 0;
-String currentDateString = ""; // Track current date to detect day changes
+unsigned long lastMidnightCheck = 0;
+String currentDateString = ""; // Track current date for logging and comparisons
+uint32_t weatherFailCount = 0;
+uint32_t todoFailCount = 0;
+uint32_t calFailCount = 0;
+uint32_t quoteFailCount = 0;
+bool fullRefreshScheduled = false;
+int lastMidnightDay = -1;
+bool otaEnabled = false;
+unsigned long otaWindowEnds = 0;
+int lastButtonState = HIGH;
+unsigned long wifiLingerUntil = 0; // keep WiFi up briefly after fetches
 
 // Battery data structure and constants
 struct BatteryData {
@@ -243,14 +263,9 @@ struct BatteryData {
 };
 BatteryData batteryInfo = {0.0, 0, false};
 const unsigned long BATTERY_UPDATE_INTERVAL_MS =
-    60UL * 1000UL; // Update every minute
+    10UL * 60UL * 1000UL; // Update every 10 minutes
 int vref = 1100;   // Reference voltage in mV (will be calibrated from eFuse if
                    // available)
-
-// Last drawn text for change detection
-String lastClockText;
-String lastCalLine1Text;
-String lastCalLine2Text;
 
 // ---------- WiFi helpers ----------
 void connectWiFi() {
@@ -274,12 +289,34 @@ void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("WiFi connected, IP: ");
     Serial.println(WiFi.localIP());
+    wifiLingerUntil = millis() + 20000; // keep WiFi up for 20s after connect
   } else {
     Serial.println("WiFi connect failed");
   }
 }
 
+void forceWifiOff() {
+  Serial.println("Forcing WiFi off");
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  wifiLingerUntil = 0;
+}
+
+// Build base URL for HA with protocol selection
+String buildHaUrl(const String &path) {
+  String scheme = HA_USE_HTTPS ? "https" : "http";
+  String url = scheme + "://" + HA_HOST + ":" + HA_PORT + path;
+  return url;
+}
+
 // ---------- Home Assistant REST API helpers ----------
+bool ensureWiFi() {
+  if (WiFi.status() == WL_CONNECTED)
+    return true;
+  connectWiFi();
+  return WiFi.status() == WL_CONNECTED;
+}
+
 /**
  * Generic helper to fetch JSON from Home Assistant REST API
  *
@@ -289,8 +326,7 @@ void connectWiFi() {
  */
 bool fetchJson(const String &url, JsonDocument &doc) {
   Serial.print("fetchJson: Connecting to WiFi...");
-  connectWiFi();
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!ensureWiFi()) {
     Serial.println(" FAILED - WiFi not connected");
     return false;
   }
@@ -300,65 +336,80 @@ bool fetchJson(const String &url, JsonDocument &doc) {
   Serial.println(url);
 
   HTTPClient http;
-  http.setTimeout(10000); // 10 second timeout
-  http.begin(url);
-  http.addHeader("Authorization", String("Bearer ") + HA_TOKEN);
-  http.addHeader("Content-Type", "application/json");
-
-  int httpCode = http.GET();
-  Serial.print("fetchJson: HTTP response code: ");
-  Serial.println(httpCode);
-
-  if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("ERROR: HTTP Error: %d\n", httpCode);
-    String errorPayload = http.getString();
-    Serial.print("Error response: ");
-    if (errorPayload.length() > 0) {
-      Serial.println(errorPayload);
+  WiFiClient plainClient;
+  WiFiClientSecure secureClient;
+  http.setTimeout(7000); // tighter timeout
+  int attempts = 0;
+  while (attempts < 2) {
+    bool beginOk = false;
+    if (HA_USE_HTTPS) {
+      secureClient.setInsecure(); // Allow self-signed HA certs; set your CA for stricter security
+      beginOk = http.begin(secureClient, url);
     } else {
-      Serial.println("(empty response)");
+      beginOk = http.begin(plainClient, url);
     }
+    if (!beginOk) {
+      Serial.println("ERROR: http.begin() failed (invalid URL or client setup)");
+      return false;
+    }
+    http.addHeader("Authorization", String("Bearer ") + HA_TOKEN);
+    http.addHeader("Content-Type", "application/json");
+
+    int httpCode = http.GET();
+    Serial.print("fetchJson: HTTP response code: ");
+    Serial.println(httpCode);
+
+    if (httpCode == HTTP_CODE_OK) {
+      String payload = http.getString();
+      http.end();
+
+      if (payload.length() == 0) {
+        Serial.println("ERROR: Empty response payload");
+        return false;
+      }
+
+      Serial.print("fetchJson: Payload length: ");
+      Serial.println(payload.length());
+      if (payload.length() < 200) {
+        Serial.print("fetchJson: Payload preview: ");
+        Serial.println(payload);
+      } else {
+        Serial.print("fetchJson: Payload preview (first 200 chars): ");
+        Serial.println(payload.substring(0, 200));
+      }
+
+      DeserializationError err = deserializeJson(doc, payload);
+      if (err) {
+        Serial.print("ERROR: JSON parsing failed: ");
+        Serial.println(err.c_str());
+        Serial.print("JSON error code: ");
+        Serial.println(err.code());
+        Serial.print("Payload start: ");
+        Serial.println(payload.substring(0, 100));
+        return false;
+      }
+
+      Serial.println("fetchJson: Success");
+      return true;
+    }
+
+    String errorPayload = http.getString();
+    Serial.printf("ERROR: HTTP Error: %d\n", httpCode);
+    Serial.print("Error response: ");
+    Serial.println(errorPayload.length() ? errorPayload : "(empty response)");
     http.end();
-    return false;
+    attempts++;
+    if (attempts < 2) {
+      Serial.println("Retrying fetchJson...");
+      delay(250);
+    }
   }
-
-  String payload = http.getString();
-  http.end();
-
-  if (payload.length() == 0) {
-    Serial.println("ERROR: Empty response payload");
-    return false;
-  }
-
-  Serial.print("fetchJson: Payload length: ");
-  Serial.println(payload.length());
-  if (payload.length() < 200) {
-    Serial.print("fetchJson: Payload preview: ");
-    Serial.println(payload);
-  } else {
-    Serial.print("fetchJson: Payload preview (first 200 chars): ");
-    Serial.println(payload.substring(0, 200));
-  }
-
-  DeserializationError err = deserializeJson(doc, payload);
-  if (err) {
-    Serial.print("ERROR: JSON parsing failed: ");
-    Serial.println(err.c_str());
-    Serial.print("JSON error code: ");
-    Serial.println(err.code());
-    Serial.print("Payload start: ");
-    Serial.println(payload.substring(0, 100));
-    return false;
-  }
-
-  Serial.println("fetchJson: Success");
-  return true;
+  return false;
 }
 
 void fetchWeather() {
   Serial.println("=== fetchWeather() called ===");
-  String url = String("http://") + HA_HOST + ":" + HA_PORT + "/api/states/" +
-               String(ENTITY_WEATHER);
+  String url = buildHaUrl(String("/api/states/") + String(ENTITY_WEATHER));
   Serial.print("Weather URL: ");
   Serial.println(url);
 
@@ -366,8 +417,10 @@ void fetchWeather() {
 
   if (!fetchJson(url, doc)) {
     Serial.println("ERROR: Weather fetch failed - fetchJson returned false");
+    weatherFailCount++;
     return;
   }
+  weatherFailCount = 0;
 
   Serial.println("Weather JSON fetched successfully");
 
@@ -379,7 +432,13 @@ void fetchWeather() {
     currentWeather.temperature = "-- C";
   } else {
     float temp = doc["attributes"]["temperature"];
-    currentWeather.temperature = String(temp, 1) + " C";
+    float displayTemp = temp;
+    const char *unit = " C";
+    if (USE_FAHRENHEIT) {
+      displayTemp = temp * 9.0 / 5.0 + 32.0;
+      unit = " F";
+    }
+    currentWeather.temperature = String(displayTemp, 1) + unit;
   }
 
   currentWeather.condition = state ? String(state) : "--";
@@ -390,12 +449,12 @@ void fetchWeather() {
   Serial.print("Weather temperature: ");
   Serial.println(currentWeather.temperature);
   Serial.println("=== fetchWeather() complete ===");
+  disableWiFiIfAllowed();
 }
 
 void fetchQuotes() {
   Serial.println("=== fetchQuotes() called ===");
-  String url = String("http://") + HA_HOST + ":" + HA_PORT + "/api/states/" +
-               String(ENTITY_QUOTE);
+  String url = buildHaUrl(String("/api/states/") + String(ENTITY_QUOTE));
   Serial.print("Quote URL: ");
   Serial.println(url);
 
@@ -403,6 +462,7 @@ void fetchQuotes() {
 
   if (!fetchJson(url, doc)) {
     Serial.println("ERROR: Quote fetch failed - fetchJson returned false");
+    quoteFailCount++;
     return;
   }
 
@@ -411,10 +471,13 @@ void fetchQuotes() {
   // Clear existing quotes
   quotes.clear();
 
-  // Parse the entries array from attributes
-  JsonArray entries = doc["attributes"]["entries"];
-  if (!entries) {
-    Serial.println("ERROR: No 'entries' array found in attributes");
+  // Parse the quotes/entries array from attributes (accept both keys)
+  JsonArray entries = doc["attributes"]["quotes"].as<JsonArray>();
+  if (entries.isNull()) {
+    entries = doc["attributes"]["entries"].as<JsonArray>();
+  }
+  if (entries.isNull()) {
+    Serial.println("ERROR: No 'quotes' or 'entries' array found in attributes");
     return;
   }
 
@@ -462,11 +525,13 @@ void fetchQuotes() {
 
   Serial.print("Total quotes stored: ");
   Serial.println(quotes.size());
+  quoteFailCount = 0;
 
   // Reset current quote index
   currentQuoteIndex = 0;
 
   Serial.println("=== fetchQuotes() complete ===");
+  disableWiFiIfAllowed();
 }
 
 // Helper to get today's date string (YYYY-MM-DD) from NTP
@@ -494,8 +559,7 @@ String getTodayDateString() {
 bool fetchJsonPost(const String &url, const String &payload,
                    JsonDocument &doc) {
   Serial.print("fetchJsonPost: Connecting to WiFi...");
-  connectWiFi();
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!ensureWiFi()) {
     Serial.println("FAILED - WiFi not connected");
     return false;
   }
@@ -507,8 +571,20 @@ bool fetchJsonPost(const String &url, const String &payload,
   Serial.println(payload);
 
   HTTPClient http;
-  http.setTimeout(10000); // 10 second timeout
-  http.begin(url);
+  WiFiClient plainClient;
+  WiFiClientSecure secureClient;
+  bool beginOk = false;
+  if (HA_USE_HTTPS) {
+    secureClient.setInsecure();
+    beginOk = http.begin(secureClient, url);
+  } else {
+    beginOk = http.begin(plainClient, url);
+  }
+  if (!beginOk) {
+    Serial.println("ERROR: http.begin() failed (invalid URL or client setup)");
+    return false;
+  }
+  http.setTimeout(7000); // tighter timeout
   http.addHeader("Authorization", String("Bearer ") + HA_TOKEN);
   http.addHeader("Content-Type", "application/json");
 
@@ -563,12 +639,12 @@ void fetchTodos() {
     return;
   }
 
-  todoList.clear();
+  std::vector<TodoItem> newTodos;
   JsonDocument doc; // Larger buffer for service response
 
   for (const char *entity : ENTITY_TODOS) {
-    String url = String("http://") + HA_HOST + ":" + HA_PORT +
-                 "/api/services/todo/get_items?return_response=true";
+    String url = buildHaUrl(
+        "/api/services/todo/get_items?return_response=true");
     // Add status: needs_action to be explicit and match common usage
     String payload = String("{\"entity_id\": \"") + entity +
                      "\", \"status\": \"needs_action\"}";
@@ -614,15 +690,23 @@ void fetchTodos() {
         TodoItem item;
         item.text = summary;
         item.completed = false;
-        todoList.push_back(item);
+        newTodos.push_back(item);
       }
     }
   }
 
   // Limit to 6 items
-  if (todoList.size() > 6) {
-    todoList.resize(6);
+  if (newTodos.size() > 6) {
+    newTodos.resize(6);
   }
+
+  if (!newTodos.empty()) {
+    todoList = newTodos;
+    todoFailCount = 0;
+  } else {
+    todoFailCount++;
+  }
+  disableWiFiIfAllowed();
 }
 
 // Helper to get URL-encoded ISO8601 string for Calendar API
@@ -641,7 +725,7 @@ String getISOTime(time_t t) {
  */
 void fetchCalendar() {
   Serial.println("=== fetchCalendar() called ===");
-  calendarEvents.clear();
+  std::vector<CalendarEvent> newEvents;
   JsonDocument doc;
 
   // Get current time and end time (7 days later)
@@ -671,9 +755,8 @@ void fetchCalendar() {
     Serial.println(entity);
     // Use the Calendar API to get events in range
     // URL: /api/calendars/{entity}?start={start}&end={end}
-    String url = String("http://") + HA_HOST + ":" + HA_PORT +
-                 "/api/calendars/" + entity + "?start=" + startStr +
-                 "&end=" + endStr;
+    String url = buildHaUrl(String("/api/calendars/") + entity + "?start=" +
+                            startStr + "&end=" + endStr);
 
     Serial.print("Fetching Calendar URL: ");
     Serial.println(url);
@@ -685,6 +768,7 @@ void fetchCalendar() {
       Serial.print("URL was: ");
       Serial.println(url);
       Serial.println(">>> Moving to next calendar entity");
+      calFailCount++;
       continue;
     }
 
@@ -731,7 +815,7 @@ void fetchCalendar() {
         }
 
         evt.title = v["summary"].as<String>();
-        calendarEvents.push_back(evt);
+        newEvents.push_back(evt);
         totalEvents++;
 
         Serial.print("  Event: ");
@@ -757,7 +841,7 @@ void fetchCalendar() {
   Serial.println(totalEvents);
 
   // Format for display BEFORE sorting and limiting
-  for (auto &evt : calendarEvents) {
+  for (auto &evt : newEvents) {
     if (evt.isoDateTime.length() >= 10) {
       // Simple parsing assuming ISO format YYYY-MM-DD...
       evt.date = evt.isoDateTime.substring(5, 10); // MM-DD
@@ -770,23 +854,31 @@ void fetchCalendar() {
   }
 
   // Sort by ISO datetime FIRST (to get chronological order)
-  std::sort(calendarEvents.begin(), calendarEvents.end(),
+  std::sort(newEvents.begin(), newEvents.end(),
             [](const CalendarEvent &a, const CalendarEvent &b) {
               return a.isoDateTime < b.isoDateTime;
             });
 
   // NOW limit to display area (increase to 10 items to show more events for the
   // week) Each event takes 2 lines (date/time + title), so 10 items = 5 events
-  if (calendarEvents.size() > 10) {
-    calendarEvents.resize(10);
+  if (newEvents.size() > 10) {
+    newEvents.resize(10);
   }
 
   Serial.print("Calendar events after sorting and limiting: ");
-  Serial.println(calendarEvents.size());
+  Serial.println(newEvents.size());
 
   Serial.print("Final calendar events count after formatting: ");
-  Serial.println(calendarEvents.size());
+  Serial.println(newEvents.size());
   Serial.println("=== fetchCalendar() complete ===");
+
+  if (!newEvents.empty()) {
+    calendarEvents = newEvents;
+    calFailCount = 0;
+  } else {
+    calFailCount++;
+  }
+  disableWiFiIfAllowed();
 }
 
 // Helper to get current time string from NTP
@@ -796,8 +888,12 @@ String fetchTime() {
     return "--:--";
   }
   char timeStringBuff[10];
-  strftime(timeStringBuff, sizeof(timeStringBuff), "%I:%M",
-           &timeinfo); // 12-hour format (01-12)
+  if (USE_24H_TIME) {
+    strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo);
+  } else {
+    strftime(timeStringBuff, sizeof(timeStringBuff), "%I:%M",
+             &timeinfo); // 12-hour format (01-12)
+  }
   return String(timeStringBuff);
 }
 
@@ -897,6 +993,20 @@ void rotateQuote() {
  */
 bool isWiFiConnected() { return (WiFi.status() == WL_CONNECTED); }
 
+void disableWiFiIfAllowed() {
+  if (otaEnabled)
+    return;
+  if (millis() < wifiLingerUntil)
+    return;
+  forceWifiOff();
+}
+
+void enableOtaWindow() {
+  otaEnabled = true;
+  otaWindowEnds = millis() + OTA_WINDOW_MS;
+  Serial.println("OTA window enabled");
+}
+
 /**
  * Draw WiFi status icon (connected or disconnected)
  *
@@ -956,12 +1066,16 @@ BatteryData readBattery() {
 
   bat.voltage = voltage;
 
-  // Calculate percentage: 3.0V = 0%, 4.2V = 100%
-  // Standard LiPo batteries: 4.2V (100%) to 3.0V (0%)
-  // Some batteries may have different ranges (e.g., LiFePO4: 3.6V to 2.5V)
-  // Adjust these values if your battery has different specifications
-  float minVoltage = 3.0; // Minimum safe voltage (0%)
-  float maxVoltage = 4.2; // Maximum voltage when fully charged (100%)
+  // Calculate percentage using a more realistic range:
+  // ~3.3V  = 0%
+  // ~4.15V = 100%
+  //
+  // Note:
+  // - Many LiPo packs sit near 4.2V while still charging (constant voltage
+  //   phase), so mapping 4.2V directly to 100% tends to show "100%" too early.
+  // - Using 3.3–4.15V gives a more useful spread of percentages in normal use.
+  float minVoltage = 3.3;  // Treat ~3.3V as effectively empty for display purposes
+  float maxVoltage = 4.15; // Treat ~4.15V as "full" for percentage calculation
 
   // Only calculate percentage if voltage is reasonable
   if (voltage >= minVoltage) {
@@ -986,79 +1100,14 @@ BatteryData readBattery() {
     Serial.println("V) - Check battery connection!");
   }
 
-  // Detect charging: voltage above 4.0V suggests charging (lowered from 4.15V)
-  // When USB-C is connected, the board powers from USB and charges the battery
-  // Battery voltage will be higher when charging
-  // Note: The board automatically switches between USB power and battery power
-  bat.isCharging = (voltage >= 4.0);
+// Charging detection no longer displayed
+bat.isCharging = false;
 
   return bat;
 }
 
-/**
- * Draw battery indicator with percentage
- * Shows battery icon (drawn programmatically) and percentage text
- *
- * @param x Left position
- * @param y Top position
- */
-void drawBatteryIndicator(int32_t x, int32_t y) {
-  // Clear battery area
-  epd_clear_area(batteryArea);
+bool enforceFullRefreshIfNeeded() { return false; }
 
-  // Create a small temporary framebuffer for battery icon (20x12 pixels)
-  const int32_t iconWidth = 20;
-  const int32_t iconHeight = 12;
-  const size_t iconBufferSize = (iconWidth * iconHeight) / 2; // Packed pixels
-  uint8_t *iconBuffer = (uint8_t *)ps_calloc(iconBufferSize, sizeof(uint8_t));
-
-  if (iconBuffer == NULL) {
-    Serial.println("ERROR: Failed to allocate battery icon buffer");
-    return;
-  }
-
-  // Clear buffer to white
-  memset(iconBuffer, 0xFF, iconBufferSize);
-
-  // Draw battery outline (rectangle) - coordinates relative to framebuffer
-  // (0,0)
-  epd_draw_rect(1, 1, iconWidth - 4, iconHeight - 2, 0,
-                iconBuffer); // Battery body
-
-  // Draw battery terminal (right side)
-  epd_fill_rect(iconWidth - 3, 3, 2, iconHeight - 6, 0, iconBuffer);
-
-  // Draw battery fill based on percentage
-  int fillWidth = ((batteryInfo.percentage * (iconWidth - 6)) /
-                   100); // Max width accounting for borders
-  if (fillWidth > 0) {
-    epd_fill_rect(2, 2, fillWidth, iconHeight - 4, 0, iconBuffer);
-  }
-
-  // Draw charging indicator (lightning bolt) if charging
-  if (batteryInfo.isCharging) {
-    // Simple lightning shape using lines (coordinates relative to framebuffer)
-    epd_draw_line(5, 2, 8, 6, 0, iconBuffer);
-    epd_draw_line(8, 2, 11, 6, 0, iconBuffer);
-    epd_draw_line(11, 6, 8, 10, 0, iconBuffer);
-    epd_draw_line(8, 6, 5, 10, 0, iconBuffer);
-  }
-
-  // Render icon to display
-  Rect_t iconArea = {
-      .x = x, .y = y + 5, .width = iconWidth, .height = iconHeight};
-  epd_draw_grayscale_image(iconArea, iconBuffer);
-
-  // Free temporary buffer
-  free(iconBuffer);
-
-  // Draw percentage text next to icon
-  int32_t text_x = x + 24; // After 20px icon + 4px spacing
-  int32_t text_y = y + 25; // Same offset as other top bar items
-  String batText = String(batteryInfo.percentage) + "%";
-
-  writeln((GFXfont *)&FiraSansMedium, batText.c_str(), &text_x, &text_y, NULL);
-}
 
 // Parse ISO datetime string to time_t
 time_t parseISODateTime(const String &isoStr) {
@@ -1228,35 +1277,12 @@ void drawMiniCalendar(int32_t x, int32_t y, int32_t width, int32_t height) {
     // Highlight today with a box border
     bool isToday = (day == currentDay);
 
-    // Draw day number first
+    // Draw day number
+    const GFXfont *dayFont = (GFXfont *)&FiraSansSmall;
+    int32_t num_y = cursor_y;
     char dayStr[4];
     snprintf(dayStr, sizeof(dayStr), "%d", day);
-    writeln((GFXfont *)&FiraSansSmall, dayStr, &cursor_x, &cursor_y, NULL);
-
-    if (isToday) {
-      // Draw a box border around today's date
-      // Calculate box position - center it around the day number
-      int32_t boxX = x + (i * dayWidth) + 3;
-      int32_t boxY = cursor_y - FiraSansSmall.advance_y - 3;
-      int32_t boxWidth = dayWidth - 6;
-      int32_t boxHeight = FiraSansSmall.advance_y + 4;
-
-      // Use a small framebuffer to draw the border
-      size_t bufferSize = (boxWidth * boxHeight + 1) / 2;
-      if (bufferSize > 0 && bufferSize < 1000) { // Safety check
-        uint8_t *boxBuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), bufferSize);
-        if (boxBuffer) {
-          memset(boxBuffer, 0xFF, bufferSize); // Clear to white
-          // Draw rectangle border (black border on white background)
-          epd_draw_rect(0, 0, boxWidth, boxHeight, 0, boxBuffer);
-          // Draw the framebuffer to screen
-          Rect_t boxArea = {
-              .x = boxX, .y = boxY, .width = boxWidth, .height = boxHeight};
-          epd_draw_grayscale_image(boxArea, boxBuffer);
-          free(boxBuffer);
-        }
-      }
-    }
+    writeln(dayFont, dayStr, &cursor_x, &num_y, NULL);
   }
 }
 
@@ -1561,17 +1587,19 @@ void drawDashboard() {
   Serial.println("Screen cleared, drawing content...");
 
   // ========== TOP HEADER ==========
-  // 1. Clock (Top Left) - No icon, smaller font
-  String timeStr = fetchTime();
-  Serial.print("Time: ");
-  Serial.println(timeStr);
+  // Date (placed at former clock position to reduce refresh frequency)
+  time_t now;
+  struct tm timeinfo;
+  time(&now);
+  localtime_r(&now, &timeinfo);
+  char dateStr[50];
+  strftime(dateStr, sizeof(dateStr), "%b %d", &timeinfo); // "Jan 15"
+  currentDateString = String(dateStr);
 
-  // Draw time text in top left corner (no icon) - compact size with medium font
-  int32_t clock_x = clockArea.x;
-  int32_t clock_y = clockArea.y + 25; // Adjusted for very compact area
+  int32_t date_x = clockArea.x;
+  int32_t date_y = clockArea.y + 25; // Use compact positioning
   epd_clear_area(clockArea);
-  writeln((GFXfont *)&FiraSansMedium, timeStr.c_str(), &clock_x, &clock_y,
-          NULL);
+  writeln((GFXfont *)&FiraSansMedium, dateStr, &date_x, &date_y, NULL);
 
   // WiFi Status Indicator - Draw connected/disconnected icon
   bool wifiConnected = isWiFiConnected();
@@ -1583,44 +1611,17 @@ void drawDashboard() {
   // Draw WiFi status icon (connected or disconnected)
   drawWiFiStatus(wifiStatusArea.x, wifiStatusArea.y + 2);
 
-  // Battery Status Indicator - Read and draw battery level
-  // Note: epd_poweron() is already called at start of drawDashboard()
-  batteryInfo = readBattery();
-  Serial.print("Battery: ");
-  Serial.print(batteryInfo.voltage);
-  Serial.print("V (");
-  Serial.print(batteryInfo.percentage);
-  Serial.print("%), Charging: ");
-  Serial.println(batteryInfo.isCharging ? "Yes" : "No");
-  drawBatteryIndicator(batteryArea.x, batteryArea.y);
-
-  // 2. Weather (Top Center) - Compact temperature display
+  // Weather (Top Center) - Compact temperature display
   updateWeatherSection(false);
 
-  // 3. Date (Top Right) - Updated separately via updateDate() function (once
-  // per day) Draw current date (will be updated separately if it changes) -
-  // compact size matching clock
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  char dateStr[50];
-  strftime(
-      dateStr, sizeof(dateStr), "%b %d",
-      &timeinfo); // Shorter format: "Jan 15" instead of "Monday, January 15"
-  String newDateString = String(dateStr);
-  currentDateString = newDateString; // Update tracking variable
-
-  int32_t date_x = dateArea.x;
-  int32_t date_y = dateArea.y + 25; // Same offset as clock for compact size
-  epd_clear_area(dateArea);
-  writeln((GFXfont *)&FiraSansMedium, dateStr, &date_x, &date_y, NULL);
+  // Date area (was top-right) left blank to avoid extra refresh
 
   // ========== QUOTE SECTION ==========
   drawQuote();
 
   // Draw divider below quote section
-  drawTextDivider(20, 110, 920);
+  // Divider below quote
+  drawTextDivider(20, 95, 920);
 
   // ========== MIDDLE SECTION ==========
 
@@ -1731,19 +1732,11 @@ void drawDashboard() {
            icon_calendar_data, icon_calendar_width, icon_calendar_height);
   Serial.println(">>> drawList for UPCOMING calendar completed");
 
-  // Draw divider below TODO/UPCOMING sections, before mini calendar
-  // TODO/UPCOMING areas end at y=440 (160 + 280)
-  // Divider text draws at y + advance_y + descender (~y+50px), so if divider at
-  // y=440, text draws at ~y=490 Mini calendar starts at y=490, so we need
-  // divider at y=440 or lower Place divider at y=440 (right after TODO/UPCOMING
-  // ends), text will draw at ~y=490 Move mini calendar down to y=495 to give
-  // 5px gap after divider text
-  drawTextDivider(20, 440, 920);
+  // Divider above mini calendar
+  drawTextDivider(20, 435, 920);
 
   // ========== BOTTOM SECTION ==========
   // 6. Mini Calendar (Compact, Bottom Full Width)
-  // Positioned at y=495 to y=545, but screen is only 540px, so clip to y=490 to
-  // y=540 Actually, let's keep it at y=490 but ensure divider doesn't overlap
   epd_clear_area(miniCalendarArea);
   drawMiniCalendar(miniCalendarArea.x, miniCalendarArea.y,
                    miniCalendarArea.width, miniCalendarArea.height);
@@ -1770,9 +1763,8 @@ void drawInitialScreen() {
 }
 
 /**
- * Update date display - only called when date changes (once per day)
- * Checks if date string has changed before updating to avoid unnecessary
- * refreshes
+ * Update date tracking (no drawing). Called in setup to initialize currentDateString
+ * and lastMidnightDay.
  */
 void updateDate() {
   time_t now;
@@ -1784,26 +1776,10 @@ void updateDate() {
            &timeinfo); // Shorter format: "Jan 15"
   String newDateString = String(dateStr);
 
-  // Only update if date has changed
-  if (newDateString != currentDateString) {
-    Serial.print("Date changed from '");
-    Serial.print(currentDateString);
-    Serial.print("' to '");
-    Serial.print(newDateString);
-    Serial.println("' - Updating date display");
-
-    currentDateString = newDateString;
-    epd_poweron();
-    int32_t date_x = dateArea.x;
-    int32_t date_y = dateArea.y + 25; // Same offset as clock for compact size
-    epd_clear_area(dateArea);
-    writeln((GFXfont *)&FiraSans, dateStr, &date_x, &date_y, NULL);
-    epd_poweroff();
-
-    lastDateUpdate = millis();
-  } else {
-    Serial.println("Date unchanged, no update needed");
-  }
+  currentDateString = newDateString;
+  lastMidnightDay = timeinfo.tm_mday;
+  Serial.print("Date initialized to ");
+  Serial.println(currentDateString);
 }
 
 // ---------- Arduino lifecycle ----------
@@ -1821,6 +1797,18 @@ void setup() {
   delay(1000);
   Serial.println("\nEPD47 Home Assistant Dashboard");
 
+  pinMode(BUTTON_1, INPUT_PULLUP); // Button to open OTA window on demand
+  lastButtonState = digitalRead(BUTTON_1);
+  if (String(OTA_PASSWORD) == "CHANGE_ME_OTA_PASSWORD") {
+    Serial.println("FATAL: OTA password is not set. Update OTA_PASSWORD_VALUE in secrets.h and OTA_PASSWORD in .platformio_env.");
+    while (true) {
+      delay(1000);
+    }
+  }
+  if (String(OTA_PASSWORD).length() < 8) {
+    Serial.println("⚠ WARNING: OTA password is shorter than 8 characters. Consider using a stronger password.");
+  }
+
   // Configure ADC for battery reading (ESP32-S3)
   // BATT_PIN is GPIO 14 for ESP32-S3
   // Note: ADC1 is used for GPIO 0-21 on ESP32-S3
@@ -1832,7 +1820,7 @@ void setup() {
   // value) This is the same method used in the demo example
   esp_adc_cal_characteristics_t adc_chars;
   esp_adc_cal_value_t val_type = esp_adc_cal_characterize(
-      ADC_UNIT_2,       // ADC2 unit (for GPIO 14 on ESP32-S3)
+      ADC_UNIT_1,       // ESP32-S3 battery pin uses ADC1
       ADC_ATTEN_DB_11,  // 11dB attenuation
       ADC_WIDTH_BIT_12, // 12-bit width
       1100,             // Default vref (will be overridden if eFuse available)
@@ -1865,7 +1853,10 @@ void setup() {
   ArduinoOTA.setHostname(
       "epd47-dashboard"); // Hostname for OTA (appears in network)
   ArduinoOTA.setPassword(
-      "epd47ota"); // OTA password - CHANGE THIS for security!
+      OTA_PASSWORD); // OTA password - keep in secrets.h (matches .platformio_env)
+  if (String(OTA_PASSWORD) == "CHANGE_ME_OTA_PASSWORD") {
+    Serial.println("⚠ WARNING: OTA password is still the placeholder. Update OTA_PASSWORD_VALUE in secrets.h and OTA_PASSWORD in .platformio_env.");
+  }
 
   ArduinoOTA.onStart([]() {
     String type;
@@ -1902,6 +1893,7 @@ void setup() {
 
   ArduinoOTA.begin();
   Serial.println("OTA ready");
+  enableOtaWindow(); // Allow OTA immediately after boot for convenience
 
   // Init NTP
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
@@ -1922,7 +1914,6 @@ void setup() {
   unsigned long now = millis();
   lastWeatherUpdate = now;
   lastCalTodoUpdate = now;
-  lastClockUpdate = now;
   lastQuoteFetch = now;
   lastQuoteRotation = now;
   lastBatteryUpdate = now;
@@ -1933,14 +1924,50 @@ void setup() {
  * Runs continuously, updating different sections at their configured intervals
  */
 void loop() {
-  // Handle OTA updates (must be called regularly to accept incoming updates)
-  ArduinoOTA.handle();
+  // Handle OTA updates only when OTA window is active
+  if (otaEnabled) {
+    ArduinoOTA.handle();
+    if (millis() > otaWindowEnds) {
+      Serial.println("OTA window expired");
+      otaEnabled = false;
+    }
+  }
+
+  // Simple button poll to re-enable OTA (active low, edge detected)
+  int buttonState = digitalRead(BUTTON_1);
+  if (buttonState == LOW && lastButtonState == HIGH) {
+    Serial.println("OTA button pressed - enabling OTA window");
+    enableOtaWindow();
+    connectWiFi();
+  }
+  lastButtonState = buttonState;
+
+  // If OTA is enabled but WiFi dropped, reconnect
+  if (otaEnabled && WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+  }
+
+  // If OTA is not active, ensure WiFi is off (LED off)
+  if (!otaEnabled) {
+    disableWiFiIfAllowed();
+  }
 
   unsigned long now = millis();
+  bool lowBatteryMode =
+      (!batteryInfo.isCharging && batteryInfo.percentage > 0 &&
+       batteryInfo.percentage < 20);
+  unsigned long weatherInterval =
+      WEATHER_UPDATE_INTERVAL_MS * (lowBatteryMode ? 2 : 1);
+  unsigned long calTodoInterval =
+      CAL_TODO_UPDATE_INTERVAL_MS * (lowBatteryMode ? 2 : 1);
+  unsigned long quoteFetchInterval =
+      QUOTE_FETCH_INTERVAL_MS * (lowBatteryMode ? 2 : 1);
+  unsigned long quoteRotateInterval =
+      QUOTE_ROTATION_INTERVAL_MS * (lowBatteryMode ? 2 : 1);
 
   // Weather update every hour
   if (lastWeatherUpdate == 0 ||
-      (now - lastWeatherUpdate) > WEATHER_UPDATE_INTERVAL_MS) {
+      (now - lastWeatherUpdate) > weatherInterval) {
     lastWeatherUpdate = now;
 
     Serial.println("Updating Weather...");
@@ -1950,7 +1977,7 @@ void loop() {
 
   // Calendar and Todo update every 6 hours
   if (lastCalTodoUpdate == 0 ||
-      (now - lastCalTodoUpdate) > CAL_TODO_UPDATE_INTERVAL_MS) {
+      (now - lastCalTodoUpdate) > calTodoInterval) {
     lastCalTodoUpdate = now;
 
     Serial.println("Updating Calendar and Todo...");
@@ -1959,47 +1986,10 @@ void loop() {
     updateCalendarTodoSections();
   }
 
-  // Clock update every minute
-  if (lastClockUpdate == 0 ||
-      (now - lastClockUpdate) > CLOCK_UPDATE_INTERVAL_MS) {
-    lastClockUpdate = now;
-
-    Serial.println("Updating Clock...");
-    // Only redraw clock area to save power/time (clock icon is NOT updated)
-    // Use same positioning as drawDashboard to prevent text jumping
-    epd_poweron();
-    String timeStr = fetchTime();
-
-    // Clear a slightly larger area to ensure all text (including AM/PM) is
-    // removed This prevents ghosting/bold text from multiple draws
-    Rect_t clearArea = {
-        .x = clockArea.x - 5,           // Extend left
-        .y = clockArea.y - 5,           // Extend up
-        .width = clockArea.width + 10,  // Extend right
-        .height = clockArea.height + 10 // Extend down
-    };
-
-    // Use more aggressive clearing with multiple cycles
-    epd_clear_area_cycles(clearArea, 8, 50); // 8 cycles for thorough clearing
-    delay(100); // Longer delay to ensure clear completes fully
-
-    int32_t clock_x = clockArea.x;
-    int32_t clock_y = clockArea.y + 25; // Same offset as drawDashboard
-    writeln((GFXfont *)&FiraSansMedium, timeStr.c_str(), &clock_x, &clock_y,
-            NULL);
-    epd_poweroff();
-  }
-
-  // Date update check - check periodically (every hour) if date has changed
-  // Date only updates once per day when it actually changes
-  if (lastDateUpdate == 0 ||
-      (now - lastDateUpdate) > WEATHER_UPDATE_INTERVAL_MS) {
-    updateDate(); // This function checks if date actually changed before
-                  // updating
-  }
+  // Clock removed to save refreshes
 
   // Quote fetch update (once per day)
-  if (lastQuoteFetch == 0 || (now - lastQuoteFetch) > QUOTE_FETCH_INTERVAL_MS) {
+  if (lastQuoteFetch == 0 || (now - lastQuoteFetch) > quoteFetchInterval) {
     lastQuoteFetch = now;
     Serial.println("Fetching new quotes...");
     fetchQuotes();
@@ -2007,60 +1997,48 @@ void loop() {
     drawDashboard();
   }
 
-  // Quote rotation update (every 3 hours)
+  // Quote rotation update (every 6 hours)
   if (lastQuoteRotation == 0 ||
-      (now - lastQuoteRotation) > QUOTE_ROTATION_INTERVAL_MS) {
+      (now - lastQuoteRotation) > quoteRotateInterval) {
     lastQuoteRotation = now;
     Serial.println("Rotating quote...");
-    rotateQuote();
-    drawQuote();
+    rotateQuote(); // rotateQuote() handles drawing and power management
   }
 
-  // Battery update (every minute)
+  // Midnight full refresh (check once per minute)
+  if (lastMidnightCheck == 0 || (now - lastMidnightCheck) > MIDNIGHT_CHECK_INTERVAL_MS) {
+    lastMidnightCheck = now;
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      if (timeinfo.tm_hour == 0 && timeinfo.tm_min == 0 &&
+          timeinfo.tm_mday != lastMidnightDay) {
+        Serial.println("Midnight detected, scheduling full refresh");
+        lastMidnightDay = timeinfo.tm_mday;
+        fullRefreshScheduled = true;
+      }
+    }
+  }
+
+  // Run scheduled full refresh (e.g., at midnight)
+  if (fullRefreshScheduled) {
+    fullRefreshScheduled = false;
+    drawDashboard();
+  }
+
+  // Battery display removed to avoid frequent refresh; still measure for logging
   if (lastBatteryUpdate == 0 ||
       (now - lastBatteryUpdate) > BATTERY_UPDATE_INTERVAL_MS) {
     lastBatteryUpdate = now;
 
-    Serial.println("=== Battery Reading ===");
-    Serial.println("Updating Battery...");
+    Serial.println("=== Battery Reading (no display update) ===");
     epd_poweron();
-    delay(10); // Make ADC measurement more accurate (as per demo example)
-
-    Serial.print("BATT_PIN: ");
-    Serial.println(BATT_PIN);
-    Serial.print("vref: ");
-    Serial.print(vref);
-    Serial.println("mV");
-
+    delay(10);
     batteryInfo = readBattery();
-
     Serial.print("Battery: ");
     Serial.print(batteryInfo.voltage, 3);
     Serial.print("V (");
     Serial.print(batteryInfo.percentage);
-    Serial.print("%), Charging: ");
-    Serial.println(batteryInfo.isCharging ? "Yes (USB-C connected)"
-                                          : "No (Battery only)");
-    Serial.println("======================");
-
-    // Log voltage trend for charging detection
-    static float lastVoltage = 0.0;
-    if (lastVoltage > 0.0) {
-      float voltageDiff = batteryInfo.voltage - lastVoltage;
-      if (voltageDiff > 0.01) {
-        Serial.print("  ⚡ Voltage increasing (+");
-        Serial.print(voltageDiff, 3);
-        Serial.println("V) - Battery charging!");
-        batteryInfo.isCharging = true; // Force charging status if rising
-      } else if (voltageDiff < -0.01) {
-        Serial.print("  ⬇ Voltage decreasing (");
-        Serial.print(voltageDiff, 3);
-        Serial.println("V) - Battery discharging");
-      }
-    }
-    lastVoltage = batteryInfo.voltage;
-    drawBatteryIndicator(batteryArea.x, batteryArea.y);
-    // Power off display to save battery (works on both battery and USB-C power)
+    Serial.println("%)");
     epd_poweroff();
   }
 
