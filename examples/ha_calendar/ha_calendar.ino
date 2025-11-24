@@ -73,6 +73,10 @@ const uint16_t HA_PORT = HA_PORT_NUM;
 #define USE_24H_TIME 0
 #endif
 
+#ifndef SLEEP_INTERVAL_MINUTES
+#define SLEEP_INTERVAL_MINUTES 15
+#endif
+
 // Long-lived access token from HA (from secrets.h)
 const char *HA_TOKEN = HA_TOKEN_VALUE;
 
@@ -92,6 +96,9 @@ const long gmtOffset_sec = GMT_OFFSET_SEC;
 const int daylightOffset_sec = DAYLIGHT_OFFSET_SEC;
 
 // Build todo entities vector from config.h defines
+#if ENTITY_TODOS_COUNT > 10
+#error "ENTITY_TODOS_COUNT supports up to 10 todos; extend the vector initialization if you need more."
+#endif
 const std::vector<const char *> ENTITY_TODOS = {
 #if ENTITY_TODOS_COUNT >= 1
     ENTITY_TODO_1,
@@ -108,9 +115,27 @@ const std::vector<const char *> ENTITY_TODOS = {
 #if ENTITY_TODOS_COUNT >= 5
     ENTITY_TODO_5,
 #endif
+#if ENTITY_TODOS_COUNT >= 6
+    ENTITY_TODO_6,
+#endif
+#if ENTITY_TODOS_COUNT >= 7
+    ENTITY_TODO_7,
+#endif
+#if ENTITY_TODOS_COUNT >= 8
+    ENTITY_TODO_8,
+#endif
+#if ENTITY_TODOS_COUNT >= 9
+    ENTITY_TODO_9,
+#endif
+#if ENTITY_TODOS_COUNT >= 10
+    ENTITY_TODO_10,
+#endif
 };
 
 // Build calendar entities vector from config.h defines
+#if ENTITY_CALENDARS_COUNT > 10
+#error "ENTITY_CALENDARS_COUNT supports up to 10 calendars; extend the vector initialization if you need more."
+#endif
 const std::vector<const char *> ENTITY_CALENDARS = {
 #if ENTITY_CALENDARS_COUNT >= 1
     ENTITY_CALENDAR_1,
@@ -126,6 +151,21 @@ const std::vector<const char *> ENTITY_CALENDARS = {
 #endif
 #if ENTITY_CALENDARS_COUNT >= 5
     ENTITY_CALENDAR_5,
+#endif
+#if ENTITY_CALENDARS_COUNT >= 6
+    ENTITY_CALENDAR_6,
+#endif
+#if ENTITY_CALENDARS_COUNT >= 7
+    ENTITY_CALENDAR_7,
+#endif
+#if ENTITY_CALENDARS_COUNT >= 8
+    ENTITY_CALENDAR_8,
+#endif
+#if ENTITY_CALENDARS_COUNT >= 9
+    ENTITY_CALENDAR_9,
+#endif
+#if ENTITY_CALENDARS_COUNT >= 10
+    ENTITY_CALENDAR_10,
 #endif
 };
 
@@ -148,6 +188,8 @@ struct WeatherData {
 
 struct TodoItem {
   String text;
+  String dueDate;  // YYYY-MM-DD
+  bool overdue;
 };
 
 struct CalendarEvent {
@@ -630,7 +672,8 @@ void fetchTodos() {
     return;
   }
 
-  std::vector<TodoItem> newTodos;
+  std::vector<TodoItem> overdueTodos;
+  std::vector<TodoItem> todayTodos;
   haDoc.clear(); // Reuse shared document for service response
 
   for (const char *entity : ENTITY_TODOS) {
@@ -668,26 +711,47 @@ void fetchTodos() {
         continue;
       }
 
-      // ONLY show items with a due date that is TODAY (not past dates)
+      // Only show items with a due date; skip items without due dates
       if (v["due"].isNull()) {
-        // Skip items without due dates
         continue;
       }
 
       String due = v["due"].as<String>();
+      if (due.length() < 10) {
+        continue;
+      }
 
-      // Keep if due is valid AND due date equals today (exact match)
-      if (due.length() >= 10 && due.substring(0, 10) == today) {
-        TodoItem item;
-        item.text = summary;
-        newTodos.push_back(item);
+      // Compare due date to today (YYYY-MM-DD) to categorize
+      String dueDate = due.substring(0, 10);
+      int cmp = dueDate.compareTo(today);
+      if (cmp > 0) {
+        // Future items are not shown in this view
+        continue;
+      }
+
+      TodoItem item;
+      item.text = summary;
+      item.dueDate = dueDate;
+      item.overdue = (cmp < 0);
+
+      if (item.overdue) {
+        overdueTodos.push_back(item);
+      } else {
+        todayTodos.push_back(item);
       }
     }
   }
 
-  // Limit to 6 items
-  if (newTodos.size() > 6) {
-    newTodos.resize(6);
+  // Combine overdue first, then today
+  std::vector<TodoItem> newTodos;
+  newTodos.reserve(overdueTodos.size() + todayTodos.size());
+  newTodos.insert(newTodos.end(), overdueTodos.begin(), overdueTodos.end());
+  newTodos.insert(newTodos.end(), todayTodos.begin(), todayTodos.end());
+
+  // Limit to what fits comfortably on screen
+  const size_t MAX_TODOS = 8;
+  if (newTodos.size() > MAX_TODOS) {
+    newTodos.resize(MAX_TODOS);
   }
 
   todoList = newTodos;
@@ -889,6 +953,37 @@ void drawTextDivider(int32_t x, int32_t y, int32_t width) {
   int32_t cursor_y = y + FiraSans.advance_y + FiraSans.descender;
   writeln((GFXfont *)&FiraSans, dividerText.c_str(), &cursor_x, &cursor_y,
           NULL);
+}
+
+// Basic word-wrap: splits a string into lines that fit within maxChars.
+// If a single word exceeds maxChars, it will be split mid-word.
+std::vector<String> wrapText(const String &text, int maxChars) {
+  std::vector<String> lines;
+  if (maxChars <= 0) {
+    lines.push_back(text);
+    return lines;
+  }
+
+  int start = 0;
+  while (start < text.length()) {
+    int end = start + maxChars;
+    if (end >= text.length()) {
+      lines.push_back(text.substring(start));
+      break;
+    }
+
+    int lastSpace = text.lastIndexOf(' ', end);
+    if (lastSpace <= start) {
+      // No space found in range; force break at maxChars
+      lines.push_back(text.substring(start, end));
+      start = end;
+    } else {
+      lines.push_back(text.substring(start, lastSpace));
+      start = lastSpace + 1; // Skip space
+    }
+  }
+
+  return lines;
 }
 
 /**
@@ -1281,6 +1376,8 @@ void drawList(const Rect_t &area, const std::vector<String> &lines,
       cursor_x += icon_checkbox_width + 5; // Space after icon
     }
 
+    const int32_t textStartX = cursor_x; // For wrapped lines after first
+
     // Truncate long lines to fit in area width
     String displayLine = line;
 
@@ -1297,9 +1394,7 @@ void drawList(const Rect_t &area, const std::vector<String> &lines,
     int maxChars = (area.width < 500)
                        ? 28
                        : 50; // Half width gets 28 chars, full width gets 50
-    if (displayLine.length() > maxChars) {
-      displayLine = displayLine.substring(0, maxChars - 3) + "...";
-    }
+    std::vector<String> wrappedLines = wrapText(displayLine, maxChars);
 
     // Check if this is a date/time line (starts with date pattern like "1/15"
     // or contains "All Day") Use ORIGINAL line (before truncation) for
@@ -1339,19 +1434,23 @@ void drawList(const Rect_t &area, const std::vector<String> &lines,
       Serial.println(isDateTimeLine);
     }
 
-    // Use smaller font for date/time lines in calendar (not for todo items)
-    if (isDateTimeLine && !drawIcons) {
-      writeln((GFXfont *)&FiraSansSmall, displayLine.c_str(), &cursor_x,
-              &cursor_y, NULL);
-      // Smaller font needs adjustment - add spacing to prevent overlap with
-      // title
-      cursor_y +=
-          lineSpacing + 2; // Add extra spacing after small date/time line
-    } else {
-      writeln((GFXfont *)&FiraSansMedium, displayLine.c_str(), &cursor_x,
-              &cursor_y, NULL);
-      // Normal spacing for all other lines
-      cursor_y += lineSpacing;
+    // Render wrapped lines
+    bool firstWrapped = true;
+    for (const auto &wrapped : wrappedLines) {
+      cursor_x = firstWrapped ? cursor_x : textStartX;
+
+      // Use smaller font for date/time lines in calendar (not for todo items)
+      if (isDateTimeLine && !drawIcons) {
+        writeln((GFXfont *)&FiraSansSmall, wrapped.c_str(), &cursor_x,
+                &cursor_y, NULL);
+        cursor_y += lineSpacing + 2; // Extra spacing after small date/time line
+      } else {
+        writeln((GFXfont *)&FiraSansMedium, wrapped.c_str(), &cursor_x,
+                &cursor_y, NULL);
+        cursor_y += lineSpacing;
+      }
+
+      firstWrapped = false;
     }
 
     // Check if next line would overflow (check BEFORE incrementing for next
@@ -1452,9 +1551,13 @@ void updateCalendarTodoSections() {
   std::vector<String> todoLines;
   todoLines.reserve(todoList.size() + 1);
   for (const auto &item : todoList) {
-    // All items are treated as active/pending; completed state is not tracked.
-    String prefix = "> ";
-    todoLines.push_back(prefix + item.text);
+    // Overdue items are prefixed with "!" and include due date (MM-DD)
+    String prefix = item.overdue ? "! " : "> ";
+    String line = prefix + item.text;
+    if (item.overdue && item.dueDate.length() >= 5) {
+      line += " (Due " + item.dueDate.substring(5) + ")";
+    }
+    todoLines.push_back(line);
   }
 
   if (todoLines.empty()) {
@@ -1536,8 +1639,12 @@ void drawDashboard() {
   std::vector<String> todoLines;
   todoLines.reserve(todoList.size() + 1);
   for (const auto &item : todoList) {
-    // All todo items are rendered as active; completed state is not tracked.
-    String line = "> " + item.text;
+    // Overdue items are prefixed with "!" and include due date (MM-DD)
+    String prefix = item.overdue ? "! " : "> ";
+    String line = prefix + item.text;
+    if (item.overdue && item.dueDate.length() >= 5) {
+      line += " (Due " + item.dueDate.substring(5) + ")";
+    }
     if (line.length() > 45) { // Reduced for half width
       line = line.substring(0, 42) + "...";
     }
@@ -1851,11 +1958,13 @@ void setup() {
   Serial.println("%)");
 
   if (!debugMode) {
-    Serial.println("Battery mode active - entering deep sleep for 15 minutes.");
+    Serial.print("Battery mode active - entering deep sleep for ");
+    Serial.print(SLEEP_INTERVAL_MINUTES);
+    Serial.println(" minutes.");
     // Turn off WiFi before entering deep sleep
     forceWifiOff();
-    // Configure wake-up timer: 15 minutes (15 * 60 * 1,000,000 microseconds)
-    esp_sleep_enable_timer_wakeup(15ULL * 60ULL * 1000000ULL);
+    // Configure wake-up timer: SLEEP_INTERVAL_MINUTES * 60 seconds * 1,000,000 microseconds
+    esp_sleep_enable_timer_wakeup((uint64_t)SLEEP_INTERVAL_MINUTES * 60ULL * 1000000ULL);
     Serial.println("Entering deep sleep now...");
     esp_deep_sleep_start();
   } else {

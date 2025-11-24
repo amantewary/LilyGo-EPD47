@@ -2,5 +2,9 @@
   "/page": "app/page.js",
   "/settings/page": "app/settings/page.js",
   "/ota/page": "app/ota/page.js",
-  "/api/ota/build-upload/route": "app/api/ota/build-upload/route.js"
+  "/api/ha/weather/route": "app/api/ha/weather/route.js",
+  "/api/ha/todos/route": "app/api/ha/todos/route.js",
+  "/api/ha/calendars/route": "app/api/ha/calendars/route.js",
+  "/api/ha/quotes/route": "app/api/ha/quotes/route.js",
+  "/api/ha/entities/route": "app/api/ha/entities/route.js"
 }

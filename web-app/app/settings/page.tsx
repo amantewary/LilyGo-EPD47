@@ -22,6 +22,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [savedConfig, setSavedConfig] = useState<AppConfig | null>(null);
   const [availableEntities, setAvailableEntities] = useState<{
     todos: string[];
     calendars: string[];
@@ -34,7 +35,7 @@ export default function SettingsPage() {
     sensors: [],
   });
 
-  const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<AppConfig>({
+  const { register, handleSubmit, watch, setValue, reset, formState: { errors } } = useForm<AppConfig>({
     defaultValues: DEFAULT_CONFIG,
   });
 
@@ -48,14 +49,25 @@ export default function SettingsPage() {
     if (savedConfig) {
       try {
         const parsed = JSON.parse(savedConfig);
-        Object.keys(parsed).forEach((key) => {
-          setValue(key as keyof AppConfig, parsed[key]);
-        });
+        const merged = { ...DEFAULT_CONFIG, ...parsed };
+        setSavedConfig(merged);
+        reset(merged);
+        // Seed available entity lists with saved selections so dropdowns keep context
+        setAvailableEntities((prev) => ({
+          todos: prev.todos,
+          calendars: prev.calendars,
+          weather: parsed.weatherEntity
+            ? Array.from(new Set([parsed.weatherEntity, ...prev.weather]))
+            : prev.weather,
+          sensors: parsed.quoteEntity
+            ? Array.from(new Set([parsed.quoteEntity, ...prev.sensors]))
+            : prev.sensors,
+        }));
       } catch (e) {
         console.error('Failed to load saved config:', e);
       }
     }
-  }, [setValue]);
+  }, [reset]);
 
   // Fetch available entities when HA config is provided
   useEffect(() => {
@@ -98,16 +110,32 @@ export default function SettingsPage() {
       }
 
       const data = await response.json();
+      const mergedWeather = data.weather || [];
+      const mergedSensors = data.sensors || [];
+
+      // Keep saved selections in the list even if HA response is missing them
+      if (savedConfig?.weatherEntity && !mergedWeather.includes(savedConfig.weatherEntity)) {
+        mergedWeather.unshift(savedConfig.weatherEntity);
+      }
+      if (savedConfig?.quoteEntity && !mergedSensors.includes(savedConfig.quoteEntity)) {
+        mergedSensors.unshift(savedConfig.quoteEntity);
+      }
+
       setAvailableEntities({
         todos: data.todos || [],
         calendars: data.calendars || [],
-        weather: data.weather || [],
-        sensors: data.sensors || [],
+        weather: mergedWeather,
+        sensors: mergedSensors,
       });
     } catch (err: any) {
       console.error('Failed to fetch entities:', err);
       setError(`Failed to fetch entities: ${err.message}. Please check your Home Assistant connection and token.`);
-      setAvailableEntities({ todos: [], calendars: [], weather: [], sensors: [] });
+      setAvailableEntities({
+        todos: [],
+        calendars: [],
+        weather: savedConfig?.weatherEntity ? [savedConfig.weatherEntity] : [],
+        sensors: savedConfig?.quoteEntity ? [savedConfig.quoteEntity] : [],
+      });
     }
   };
 
@@ -137,13 +165,6 @@ export default function SettingsPage() {
       localStorage.setItem('epd47-config', JSON.stringify(configToSave));
       console.log('Saved config to localStorage:', configToSave);
       setSuccess(true);
-
-      // Redirect to dashboard after a short delay
-      setTimeout(() => {
-        router.push('/');
-        // Force reload to ensure config is picked up
-        window.location.reload();
-      }, 1500);
     } catch (err: any) {
       setError(err.message || 'Failed to save configuration');
       console.error('Settings save error:', err);
@@ -151,6 +172,16 @@ export default function SettingsPage() {
       setLoading(false);
     }
   };
+
+  // Redirect when save succeeds
+  useEffect(() => {
+    if (!success) return;
+    const timer = setTimeout(() => {
+      router.push('/');
+      window.location.reload();
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [success, router]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">
@@ -164,8 +195,18 @@ export default function SettingsPage() {
         )}
 
         {success && (
-          <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded">
-            Configuration saved successfully! Redirecting...
+          <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded flex items-center justify-between gap-4">
+            <span>Configuration saved successfully! Redirecting...</span>
+            <button
+              type="button"
+              onClick={() => {
+                router.push('/');
+                window.location.reload();
+              }}
+              className="px-3 py-1 bg-epd-black text-white rounded hover:bg-epd-gray text-sm"
+            >
+              Go to Dashboard
+            </button>
           </div>
         )}
 
@@ -412,4 +453,3 @@ export default function SettingsPage() {
     </div>
   );
 }
-

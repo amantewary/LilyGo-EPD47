@@ -32,3 +32,6 @@
 // Display preferences
 #define USE_FAHRENHEIT 0 // Set to 1 to convert weather temperature to °F
 #define USE_24H_TIME 0   // Set to 1 for 24-hour clock
+
+// Deep sleep interval (minutes) when running in battery-optimized mode
+#define SLEEP_INTERVAL_MINUTES 15
