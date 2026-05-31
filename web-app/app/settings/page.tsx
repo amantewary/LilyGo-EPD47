@@ -167,9 +167,20 @@ export default function SettingsPage() {
         calendarEntities: Array.isArray(data.calendarEntities) ? data.calendarEntities : [],
       };
 
-      // Save to localStorage
+      const firmwareResponse = await fetch('/api/config/firmware', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(configToSave),
+      });
+
+      if (!firmwareResponse.ok) {
+        const errorData = await firmwareResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to sync firmware config');
+      }
+
       localStorage.setItem('epd47-config', JSON.stringify(configToSave));
-      console.log('Saved config to localStorage:', configToSave);
       setSuccess(true);
     } catch (err: any) {
       setError(err.message || 'Failed to save configuration');
