@@ -1,11 +1,13 @@
 import { NextRequest } from 'next/server';
-import { spawn } from 'child_process';
-import path from 'path';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  if (process.env.ENABLE_PIO_BUILD_UPLOAD !== '1') {
+    return new Response('Build & Upload is disabled. Set ENABLE_PIO_BUILD_UPLOAD=1 on the server to enable it.', { status: 501 });
+  }
+
   const body = await req.json().catch(() => ({}));
   const deviceIp = body.deviceIp || process.env.OTA_DEVICE_IP || '';
   const otaPassword = body.otaPassword || process.env.OTA_PASSWORD || '';
@@ -16,11 +18,16 @@ export async function POST(req: NextRequest) {
     return new Response('Missing deviceIp (set in settings or body)', { status: 400 });
   }
 
-  const projectRoot = path.join(process.cwd(), '..'); // repo root, one level above web-app
+  const projectRoot = /*turbopackIgnore: true*/ process.env.PIO_PROJECT_ROOT;
+  if (!projectRoot) {
+    return new Response('Missing PIO_PROJECT_ROOT (absolute path to the PlatformIO project root)', { status: 500 });
+  }
+
   const args = ['run', '-e', envName, '-t', 'upload'];
 
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
+      const { spawn } = await import('child_process');
       const encoder = new TextEncoder();
       const send = (text: string) => controller.enqueue(encoder.encode(text));
 

@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import FormData from 'form-data';
 import fs from 'fs';
-import path from 'path';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,10 +26,14 @@ export async function POST(request: NextRequest) {
     if (firmware) {
       firmwareBuffer = Buffer.from(await firmware.arrayBuffer());
     } else {
-      // Default to bundled demo firmware in the repo (one level up from web-app)
-      const defaultFirmwarePath =
-        process.env.DEFAULT_FIRMWARE_PATH ||
-        path.join(process.cwd(), '..', 'firmware', 'T5-ePaper-S3_demo_250901.bin');
+      const defaultFirmwarePath = process.env.DEFAULT_FIRMWARE_PATH;
+
+      if (!defaultFirmwarePath) {
+        return NextResponse.json(
+          { error: 'DEFAULT_FIRMWARE_PATH is not configured on the server. Provide a .bin file instead.' },
+          { status: 500 }
+        );
+      }
 
       if (!fs.existsSync(defaultFirmwarePath)) {
         return NextResponse.json(

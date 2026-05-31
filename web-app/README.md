@@ -133,7 +133,9 @@ The main dashboard (`/`) displays:
 4. Wait for the upload to complete (progress bar shown)
 5. Device will restart automatically
 
-Bundled firmware: by default the app looks for `../firmware/T5-ePaper-S3_demo_250901.bin` relative to `web-app`. Override with `DEFAULT_FIRMWARE_PATH=/absolute/path/to/your.bin` in the environment where the Next.js server runs.
+Bundled firmware: set `DEFAULT_FIRMWARE_PATH=/absolute/path/to/your.bin` in the environment where the Next.js server runs. If this is not set, upload a `.bin` file manually from the OTA page.
+
+Build & Upload: set `ENABLE_PIO_BUILD_UPLOAD=1` and `PIO_PROJECT_ROOT=/absolute/path/to/LilyGo-EPD47` if you want the web app to run PlatformIO directly from the OTA page. You can optionally override `PIO_CMD` and `PIO_ENV`.
 
 **Note**: Ensure the device is powered on and connected to WiFi before uploading.
 
@@ -198,6 +200,11 @@ These are optional and can be set as defaults. Configuration via the Settings pa
 - `HA_TOKEN` - Home Assistant long-lived access token (default fallback)
 - `OTA_DEVICE_IP` - ESP32 device IP address (default fallback)
 - `OTA_PASSWORD` - OTA password (must match device configuration)
+- `DEFAULT_FIRMWARE_PATH` - Optional absolute path to a bundled firmware `.bin`
+- `ENABLE_PIO_BUILD_UPLOAD` - Set to `1` to enable server-side PlatformIO Build & Upload
+- `PIO_PROJECT_ROOT` - Optional absolute path to the PlatformIO project root for Build & Upload
+- `PIO_CMD` - Optional PlatformIO command path (default: `pio`)
+- `PIO_ENV` - Optional PlatformIO environment (default: `T5-ePaper-S3-OTA`)
 
 **Security Note**: Never commit `.env` files or expose tokens in your code. Use environment variables or the Settings page for configuration.
 
