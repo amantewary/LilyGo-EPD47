@@ -2,6 +2,13 @@ import axios, { AxiosInstance } from 'axios';
 import { WeatherData, TodoItem, CalendarEvent, QuoteData, HAConfig, EntityConfig } from './types';
 import { logSafeError } from './safe-error';
 
+function getLocalDateString(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export class HAClient {
   private client: AxiosInstance;
   private config: HAConfig;
@@ -41,10 +48,22 @@ export class HAClient {
 
   async fetchTodos(entityIds: string[]): Promise<TodoItem[]> {
     const todos: TodoItem[] = [];
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today = getLocalDateString(new Date());
 
     for (const entityId of entityIds) {
       try {
+        const stateResponse = await this.client.get(`/api/states/${entityId}`);
+        const state = stateResponse.data;
+
+        if (
+          state.state === 'unavailable' ||
+          state.state === 'unknown' ||
+          state.attributes?.restored
+        ) {
+          console.warn(`Skipping unavailable todo entity: ${entityId}`);
+          continue;
+        }
+
         const response = await this.client.post(
           '/api/services/todo/get_items?return_response=true',
           {
@@ -56,22 +75,28 @@ export class HAClient {
         const items = response.data.service_response?.[entityId]?.items || [];
         
         for (const item of items) {
-          // Only include items with due date matching today
-          if (item.due && item.due.substring(0, 10) === today) {
-            todos.push({
-              text: item.summary || '',
-              completed: item.status === 'completed',
-              due: item.due,
-            });
+          if (item.status === 'completed' || !item.due) {
+            continue;
           }
+
+          const dueDate = item.due.substring(0, 10);
+          if (dueDate.length < 10 || dueDate > today) {
+            continue;
+          }
+
+          todos.push({
+            text: item.summary || '',
+            completed: false,
+            due: dueDate,
+          });
         }
       } catch (error) {
         logSafeError(`Error fetching todos from ${entityId}:`, error);
       }
     }
 
-    // Limit to 6 items
-    return todos.slice(0, 6);
+    todos.sort((a, b) => (a.due || '').localeCompare(b.due || ''));
+    return todos.slice(0, 8);
   }
 
   async fetchCalendarEvents(entityIds: string[], daysAhead: number = 7): Promise<CalendarEvent[]> {
