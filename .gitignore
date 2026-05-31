@@ -3,5 +3,13 @@
 test
 build
 secrets.h
+
+# Local/private configuration
 examples/ha_calendar/config.h
+examples/ha_calendar/secrets.h
 .platformio_env
+
+# Web app generated/vendor artifacts
+web-app/node_modules/
+web-app/.next/
+web-app/*.tsbuildinfo

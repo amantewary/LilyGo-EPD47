@@ -7,8 +7,6 @@
  * - Daily motivational quotes (rotated every 6 hours)
  * - Todo list items (due today)
  * - Upcoming calendar events (next 7 days)
- * - Mini calendar week view
- * - WiFi connection status
  * - Battery voltage logged (not drawn)
  *
  * Features:
@@ -33,52 +31,30 @@
 #include "firasans.h"
 #include "firasans_medium.h"
 #include "firasans_small.h"
+#include "calendar.h"
+#include "display.h"
+#include "ha_client.h"
+#include "quotes.h"
 #include "secrets.h"
+#include "types.h"
 #include "todo_icons.h"
 #include "utilities.h"
 #include "weather_icons.h"
-#include "wifi_icons.h"
+#include "weather.h"
+#include "todos.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
-#include <HTTPClient.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <algorithm>
 #include <vector>
 
 // Shared JSON documents for Home Assistant responses
 // With ArduinoJson v7, JsonDocument manages capacity dynamically.
-static JsonDocument haDoc;       // Single-object responses (/api/states, service responses)
-static JsonDocument haArrayDoc;  // Larger array responses (calendar, quotes)
+JsonDocument haDoc;       // Single-object responses (/api/states, service responses)
+JsonDocument haArrayDoc;  // Larger array responses (calendar, quotes)
 
 // ---------- CONFIG ----------
-// WiFi (loaded from secrets.h, which is not committed to git)
-const char *ssid = WIFI_SSID;
-const char *password = WIFI_PASSWORD;
-
-// Home Assistant (host/port loaded from secrets.h)
-const char *HA_HOST = HA_HOST_ADDR;
-const uint16_t HA_PORT = HA_PORT_NUM;
-// Use HTTPS to talk to Home Assistant (set in config.h; defaults to HTTP)
-#ifndef HA_USE_HTTPS
-#define HA_USE_HTTPS 0
-#endif
-
-// Optional output formats
-#ifndef USE_FAHRENHEIT
-#define USE_FAHRENHEIT 0
-#endif
-#ifndef USE_24H_TIME
-#define USE_24H_TIME 0
-#endif
-
-#ifndef SLEEP_INTERVAL_MINUTES
-#define SLEEP_INTERVAL_MINUTES 15
-#endif
-
-// Long-lived access token from HA (from secrets.h)
-const char *HA_TOKEN = HA_TOKEN_VALUE;
 
 // OTA password (keep private in secrets.h)
 #ifndef OTA_PASSWORD_VALUE
@@ -99,7 +75,7 @@ const int daylightOffset_sec = DAYLIGHT_OFFSET_SEC;
 #if ENTITY_TODOS_COUNT > 10
 #error "ENTITY_TODOS_COUNT supports up to 10 todos; extend the vector initialization if you need more."
 #endif
-const std::vector<const char *> ENTITY_TODOS = {
+extern const std::vector<const char *> ENTITY_TODOS = {
 #if ENTITY_TODOS_COUNT >= 1
     ENTITY_TODO_1,
 #endif
@@ -136,7 +112,7 @@ const std::vector<const char *> ENTITY_TODOS = {
 #if ENTITY_CALENDARS_COUNT > 10
 #error "ENTITY_CALENDARS_COUNT supports up to 10 calendars; extend the vector initialization if you need more."
 #endif
-const std::vector<const char *> ENTITY_CALENDARS = {
+extern const std::vector<const char *> ENTITY_CALENDARS = {
 #if ENTITY_CALENDARS_COUNT >= 1
     ENTITY_CALENDAR_1,
 #endif
@@ -181,34 +157,7 @@ const unsigned long MIDNIGHT_CHECK_INTERVAL_MS = 60UL * 1000UL; // check once pe
 const unsigned long OTA_WINDOW_MS = 5UL * 60UL * 1000UL; // OTA enabled for 5 minutes after button press
 
 // ---------- Data Structures ----------
-struct WeatherData {
-  String temperature;
-  String condition;
-};
-
-struct TodoItem {
-  String text;
-  String dueDate;  // YYYY-MM-DD
-  bool overdue;
-};
-
-struct CalendarEvent {
-  String title;
-  String startTime;   // formatted string (HH:MM)
-  String date;        // formatted string (MM-DD)
-  String isoDateTime; // Original ISO datetime for countdown calculation
-};
-
-struct QuoteData {
-  String author;
-  String text;
-};
-
-// Battery data structure and constants
-struct BatteryData {
-  float voltage;
-  int percentage;
-};
+// Core data types are defined in types.h
 BatteryData batteryInfo = {0.0, 0};
 const unsigned long BATTERY_UPDATE_INTERVAL_MS =
     10UL * 60UL * 1000UL; // Update every 10 minutes
@@ -233,18 +182,16 @@ void initCollections() {
 // Screen is 960x540
 // Layout:
 //   ┌──────────────────────────────────────┐
-//   │  LARGE TIME          DATE            │  <- Top header (full width)
-//   ├────────────────┬─────────────────────┤
-//   │  WEATHER       │   TODO LIST         │  <- Middle section (split)
-//   │  [ICON]        │   □ Task 1          │
-//   │  Temp          │   □ Task 2          │
-//   │  Condition     │   ☑ Task 3          │
-//   ├────────────────┴─────────────────────┤
-//   │  CALENDAR / UPCOMING EVENTS          │  <- Bottom section (full width)
-//   │  • Event 1 - Time                    │
-//   └──────────────────────────────────────┘
+//   │ DATE (left)             WEATHER (right) │
+//   │ "Quote of the day..."                  │
+//   ├────────────────┬───────────────────────┤
+//   │   TODO LIST    │      UPCOMING         │
+//   │   □ Task 1     │   1/15 10:00          │
+//   │   □ Task 2     │     Meeting title...  │
+//   │   ☑ Task 3     │   ...                 │
+//   └────────────────┴───────────────────────┘
 
-// Top Header - Date, WiFi, Weather (Screen: 960x540)
+// Top Header - Date and Weather (Screen: 960x540)
 const Rect_t clockArea = {.x = 20,
                           .y = 20,
                           .width = 120,
@@ -253,39 +200,28 @@ const Rect_t weatherArea = {.x = 820,
                             .y = 20,
                             .width = 120,
                             .height = 35}; // Weather in top right
-const Rect_t wifiStatusArea = {
-    .x = 260, .y = 20, .width = 60, .height = 35}; // WiFi status between date and weather
 const Rect_t quoteArea = {
     .x = 20,
     .y = 60,
     .width = 920,
-    .height = 28}; // Full width for daily quote (quote only, no author)
+    .height = 70}; // Full width for daily quote (quote only, no author)
 
 // Middle Section - Todo (left half) and UPCOMING Calendar (right half) side by
-// side. Content spans roughly y=105..420 for tighter vertical fit.
+// side. Content spans roughly y=135..520 for tighter vertical fit.
 const Rect_t todoHeaderArea = {
-    .x = 20, .y = 105, .width = 450, .height = 40}; // Left half
+    .x = 20, .y = 135, .width = 450, .height = 40}; // Left half
 const Rect_t todoListArea = {
     .x = 20,
-    .y = 145,
+    .y = 175,
     .width = 450,
-    .height = 290}; // Left half - ends near y=435, closer to divider
+    .height = 345}; // Left half - ends near y=520
 const Rect_t calendarHeaderArea = {
-    .x = 490, .y = 105, .width = 450, .height = 40}; // Right half
+    .x = 490, .y = 135, .width = 450, .height = 40}; // Right half
 const Rect_t calendarListArea = {
     .x = 490,
-    .y = 145,
+    .y = 175,
     .width = 450,
-    .height = 290}; // Right half - ends near y=435, closer to divider
-// Bottom Section - Mini Calendar (compact, full width)
-// Screen is 960x540, so we need to ensure it fits within bounds
-// Need enough height for 2 rows: day labels (~30px) + spacing + day numbers
-// (~30px) Positioned at bottom: y=490 to y=540 (50px height)
-const Rect_t miniCalendarArea = {
-    .x = 20,
-    .y = 470,
-    .width = 920,
-    .height = 60}; // Compact mini calendar at bottom, fits within 540px
+    .height = 345}; // Right half - ends near y=520
 
 // ---------- Globals ----------
 unsigned long lastWeatherUpdate = 0;
@@ -305,34 +241,6 @@ unsigned long wifiLingerUntil = 0; // keep WiFi up briefly after fetches
 bool debugMode = false; // true when BUTTON_1 held at boot, keeps device awake for OTA/debug
 
 
-// ---------- WiFi helpers ----------
-void connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED)
-    return;
-
-  Serial.print("Connecting to WiFi: ");
-  Serial.println(ssid);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-
-  uint8_t tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries < 40) {
-    delay(500);
-    Serial.print(".");
-    tries++;
-  }
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("WiFi connected, IP: ");
-    Serial.println(WiFi.localIP());
-    wifiLingerUntil = millis() + 20000; // keep WiFi up for 20s after connect
-  } else {
-    Serial.println("WiFi connect failed");
-  }
-}
-
 void forceWifiOff() {
   Serial.println("Forcing WiFi off");
   WiFi.disconnect(true);
@@ -340,715 +248,7 @@ void forceWifiOff() {
   wifiLingerUntil = 0;
 }
 
-// Build base URL for HA with protocol selection
-String buildHaUrl(const String &path) {
-  String scheme = HA_USE_HTTPS ? "https" : "http";
-  String url = scheme + "://" + HA_HOST + ":" + HA_PORT + path;
-  return url;
-}
-
-// ---------- Home Assistant REST API helpers ----------
-bool ensureWiFi() {
-  if (WiFi.status() == WL_CONNECTED)
-    return true;
-  connectWiFi();
-  return WiFi.status() == WL_CONNECTED;
-}
-
-/**
- * Generic helper to fetch JSON from Home Assistant REST API
- *
- * @param url Full URL to HA REST API endpoint
- * @param doc JsonDocument to populate with response data
- * @return true if successful, false otherwise
- */
-bool fetchJson(const String &url, JsonDocument &doc) {
-  Serial.print("fetchJson: Connecting to WiFi...");
-  if (!ensureWiFi()) {
-    Serial.println(" FAILED - WiFi not connected");
-    return false;
-  }
-  Serial.println(" OK");
-
-  Serial.print("fetchJson: Starting HTTP request to: ");
-  Serial.println(url);
-
-  HTTPClient http;
-  WiFiClient plainClient;
-  WiFiClientSecure secureClient;
-  http.setTimeout(7000); // tighter timeout
-  int attempts = 0;
-  while (attempts < 2) {
-    bool beginOk = false;
-    if (HA_USE_HTTPS) {
-      secureClient.setInsecure(); // Allow self-signed HA certs; set your CA for stricter security
-      beginOk = http.begin(secureClient, url);
-    } else {
-      beginOk = http.begin(plainClient, url);
-    }
-    if (!beginOk) {
-      Serial.println("ERROR: http.begin() failed (invalid URL or client setup)");
-      return false;
-    }
-    http.addHeader("Authorization", String("Bearer ") + HA_TOKEN);
-    http.addHeader("Content-Type", "application/json");
-
-    int httpCode = http.GET();
-    Serial.print("fetchJson: HTTP response code: ");
-    Serial.println(httpCode);
-
-    if (httpCode == HTTP_CODE_OK) {
-      String payload = http.getString();
-      http.end();
-
-      if (payload.length() == 0) {
-        Serial.println("ERROR: Empty response payload");
-        return false;
-      }
-
-      Serial.print("fetchJson: Payload length: ");
-      Serial.println(payload.length());
-      if (payload.length() < 200) {
-        Serial.print("fetchJson: Payload preview: ");
-        Serial.println(payload);
-      } else {
-        Serial.print("fetchJson: Payload preview (first 200 chars): ");
-        Serial.println(payload.substring(0, 200));
-      }
-
-      DeserializationError err = deserializeJson(doc, payload);
-      if (err) {
-        Serial.print("ERROR: JSON parsing failed: ");
-        Serial.println(err.c_str());
-        Serial.print("JSON error code: ");
-        Serial.println(err.code());
-        Serial.print("Payload start: ");
-        Serial.println(payload.substring(0, 100));
-        return false;
-      }
-
-      Serial.println("fetchJson: Success");
-      return true;
-    }
-
-    String errorPayload = http.getString();
-    Serial.printf("ERROR: HTTP Error: %d\n", httpCode);
-    Serial.print("Error response: ");
-    Serial.println(errorPayload.length() ? errorPayload : "(empty response)");
-    http.end();
-    attempts++;
-    if (attempts < 2) {
-      Serial.println("Retrying fetchJson...");
-      delay(250);
-    }
-  }
-  return false;
-}
-
-void fetchWeather() {
-  Serial.println("=== fetchWeather() called ===");
-  String url = buildHaUrl(String("/api/states/") + String(ENTITY_WEATHER));
-  Serial.print("Weather URL: ");
-  Serial.println(url);
-
-  haDoc.clear();
-
-  if (!fetchJson(url, haDoc)) {
-    Serial.println("ERROR: Weather fetch failed - fetchJson returned false");
-    return;
-  }
-
-  Serial.println("Weather JSON fetched successfully");
-
-  const char *state = haDoc["state"];
-
-  // Check if temperature exists and is valid
-  if (!haDoc["attributes"]["temperature"].is<float>()) {
-    Serial.println("WARNING: Temperature not found or invalid in JSON");
-    currentWeather.temperature = "-- C";
-  } else {
-    float temp = haDoc["attributes"]["temperature"];
-    float displayTemp = temp;
-    const char *unit = " C";
-    if (USE_FAHRENHEIT) {
-      displayTemp = temp * 9.0 / 5.0 + 32.0;
-      unit = " F";
-    }
-    currentWeather.temperature = String(displayTemp, 1) + unit;
-  }
-
-  currentWeather.condition = state ? String(state) : "--";
-
-  Serial.print("Weather condition: ");
-  Serial.println(currentWeather.condition);
-  Serial.print("Weather temperature: ");
-  Serial.println(currentWeather.temperature);
-  Serial.println("=== fetchWeather() complete ===");
-  disableWiFiIfAllowed();
-}
-
-void fetchQuotes() {
-  Serial.println("=== fetchQuotes() called ===");
-  String url = buildHaUrl(String("/api/states/") + String(ENTITY_QUOTE));
-  Serial.print("Quote URL: ");
-  Serial.println(url);
-
-  haArrayDoc.clear();
-
-  if (!fetchJson(url, haArrayDoc)) {
-    Serial.println("ERROR: Quote fetch failed - fetchJson returned false");
-    return;
-  }
-
-  Serial.println("Quote JSON fetched successfully");
-
-  // Clear existing quotes
-  quotes.clear();
-
-  // Parse the quotes/entries array from attributes (accept both keys)
-  JsonArray entries = haArrayDoc["attributes"]["quotes"].as<JsonArray>();
-  if (entries.isNull()) {
-    entries = haArrayDoc["attributes"]["entries"].as<JsonArray>();
-  }
-  if (entries.isNull()) {
-    Serial.println("ERROR: No 'quotes' or 'entries' array found in attributes");
-    return;
-  }
-
-  Serial.print("Found ");
-  Serial.print(entries.size());
-  Serial.println(" quotes");
-
-  // Parse each entry
-  for (JsonObject entry : entries) {
-    QuoteData quote;
-
-    // Get author from title
-    const char *author = entry["title"];
-    if (author) {
-      quote.author = String(author);
-    } else {
-      quote.author = "Unknown";
-    }
-
-    // Get quote text from summary (remove surrounding quotes if present)
-    const char *summary = entry["summary"];
-    if (summary) {
-      String text = String(summary);
-      // Remove leading/trailing quotes and backslashes
-      text.trim();
-      if (text.startsWith("\"") && text.endsWith("\"")) {
-        text = text.substring(1, text.length() - 1);
-      }
-      // Remove escaped quotes
-      text.replace("\\\"", "\"");
-      quote.text = text;
-    } else {
-      quote.text = "";
-    }
-
-    // Only add if we have valid text
-    if (quote.text.length() > 0) {
-      quotes.push_back(quote);
-      Serial.print("Added quote from ");
-      Serial.print(quote.author);
-      Serial.print(": ");
-      Serial.println(quote.text.substring(0, 50)); // Print first 50 chars
-    }
-  }
-
-  Serial.print("Total quotes stored: ");
-  Serial.println(quotes.size());
-
-  // Reset current quote index
-  currentQuoteIndex = 0;
-
-  Serial.println("=== fetchQuotes() complete ===");
-  disableWiFiIfAllowed();
-}
-
-// Helper to get today's date string (YYYY-MM-DD) from NTP
-String getTodayDateString() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("Failed to obtain time");
-    return "";
-  }
-  char timeStringBuff[20];
-  strftime(timeStringBuff, sizeof(timeStringBuff), "%Y-%m-%d", &timeinfo);
-  return String(timeStringBuff);
-}
-
-// Helper to fetch JSON via POST (for Service Calls)
-/**
- * POST JSON data to Home Assistant REST API
- * Used for service calls (e.g., todo list operations)
- *
- * @param url Full URL to HA REST API endpoint
- * @param payload JSON payload string
- * @param doc JsonDocument to populate with response data
- * @return true if successful, false otherwise
- */
-bool fetchJsonPost(const String &url, const String &payload,
-                   JsonDocument &doc) {
-  Serial.print("fetchJsonPost: Connecting to WiFi...");
-  if (!ensureWiFi()) {
-    Serial.println("FAILED - WiFi not connected");
-    return false;
-  }
-  Serial.println("OK");
-
-  Serial.print("fetchJsonPost: URL: ");
-  Serial.println(url);
-  Serial.print("fetchJsonPost: Payload: ");
-  Serial.println(payload);
-
-  HTTPClient http;
-  WiFiClient plainClient;
-  WiFiClientSecure secureClient;
-  bool beginOk = false;
-  if (HA_USE_HTTPS) {
-    secureClient.setInsecure();
-    beginOk = http.begin(secureClient, url);
-  } else {
-    beginOk = http.begin(plainClient, url);
-  }
-  if (!beginOk) {
-    Serial.println("ERROR: http.begin() failed (invalid URL or client setup)");
-    return false;
-  }
-  http.setTimeout(7000); // tighter timeout
-  http.addHeader("Authorization", String("Bearer ") + HA_TOKEN);
-  http.addHeader("Content-Type", "application/json");
-
-  int httpCode = http.POST(payload);
-  Serial.print("fetchJsonPost: HTTP response code: ");
-  Serial.println(httpCode);
-
-  String response =
-      http.getString(); // Get response regardless of code for debug
-
-  if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("ERROR: HTTP POST failed with code: %d\n", httpCode);
-    Serial.print("Response: ");
-    if (response.length() > 0) {
-      Serial.println(response);
-    } else {
-      Serial.println("(empty response)");
-    }
-    http.end();
-    return false;
-  }
-
-  http.end();
-
-  if (response.length() == 0) {
-    Serial.println("ERROR: Empty response payload");
-    return false;
-  }
-
-  Serial.print("fetchJsonPost: Response length: ");
-  Serial.println(response.length());
-
-  DeserializationError err = deserializeJson(doc, response);
-  if (err) {
-    Serial.print("ERROR: JSON parsing failed: ");
-    Serial.println(err.c_str());
-    Serial.print("JSON error code: ");
-    Serial.println(err.code());
-    Serial.print("Response start: ");
-    Serial.println(response.substring(0, 100));
-    return false;
-  }
-
-  Serial.println("fetchJsonPost: Success");
-  return true;
-}
-
-void fetchTodos() {
-  // 1. Get current date for filtering
-  String today = getTodayDateString();
-  if (today.length() == 0) {
-    return;
-  }
-
-  std::vector<TodoItem> overdueTodos;
-  std::vector<TodoItem> todayTodos;
-  haDoc.clear(); // Reuse shared document for service response
-
-  for (const char *entity : ENTITY_TODOS) {
-    String url = buildHaUrl(
-        "/api/services/todo/get_items?return_response=true");
-    // Add status: needs_action to be explicit and match common usage
-    String payload = String("{\"entity_id\": \"") + entity +
-                     "\", \"status\": \"needs_action\"}";
-
-    haDoc.clear();
-
-    if (!fetchJsonPost(url, payload, haDoc))
-      continue;
-
-    // Service response structure (with return_response=true):
-    // {
-    //   "service_response": {
-    //     "todo.errands": {
-    //       "items": [ ... ]
-    //     }
-    //   }
-    // }
-
-    JsonArray items = haDoc["service_response"][entity]["items"];
-    if (items.isNull()) {
-      continue;
-    }
-
-    for (JsonVariant v : items) {
-      String summary = v["summary"].as<String>();
-      String status = v["status"].as<String>();
-
-      // Skip completed items
-      if (status == "completed") {
-        continue;
-      }
-
-      // Only show items with a due date; skip items without due dates
-      if (v["due"].isNull()) {
-        continue;
-      }
-
-      String due = v["due"].as<String>();
-      if (due.length() < 10) {
-        continue;
-      }
-
-      // Compare due date to today (YYYY-MM-DD) to categorize
-      String dueDate = due.substring(0, 10);
-      int cmp = dueDate.compareTo(today);
-      if (cmp > 0) {
-        // Future items are not shown in this view
-        continue;
-      }
-
-      TodoItem item;
-      item.text = summary;
-      item.dueDate = dueDate;
-      item.overdue = (cmp < 0);
-
-      if (item.overdue) {
-        overdueTodos.push_back(item);
-      } else {
-        todayTodos.push_back(item);
-      }
-    }
-  }
-
-  // Combine overdue first, then today
-  std::vector<TodoItem> newTodos;
-  newTodos.reserve(overdueTodos.size() + todayTodos.size());
-  newTodos.insert(newTodos.end(), overdueTodos.begin(), overdueTodos.end());
-  newTodos.insert(newTodos.end(), todayTodos.begin(), todayTodos.end());
-
-  // Limit to what fits comfortably on screen
-  const size_t MAX_TODOS = 8;
-  if (newTodos.size() > MAX_TODOS) {
-    newTodos.resize(MAX_TODOS);
-  }
-
-  todoList = newTodos;
-  disableWiFiIfAllowed();
-}
-
-// Helper to get URL-encoded ISO8601 string for Calendar API
-String getISOTime(time_t t) {
-  struct tm *tm = localtime(&t);
-  char buf[30];
-  // Format: YYYY-MM-DDTHH:MM:SS
-  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm);
-  return String(buf);
-}
-
-/**
- * Fetch calendar events from Home Assistant
- * Gets events from multiple calendar entities for the next 7 days
- * Sorts events chronologically and limits to 10 events
- */
-void fetchCalendar() {
-  Serial.println("=== fetchCalendar() called ===");
-  std::vector<CalendarEvent> newEvents;
-  haArrayDoc.clear();
-
-  // Get current time and end time (7 days later)
-  time_t now;
-  time(&now);
-  time_t end = now + (7 * 24 * 60 * 60);
-
-  String startStr = getISOTime(now);
-  String endStr = getISOTime(end);
-
-  Serial.print("Calendar time range: ");
-  Serial.print(startStr);
-  Serial.print(" to ");
-  Serial.println(endStr);
-
-  // URL Encode the timestamps (specifically :)
-  startStr.replace(":", "%3A");
-  endStr.replace(":", "%3A");
-
-  Serial.print("Number of calendar entities configured: ");
-  Serial.println(ENTITY_CALENDARS.size());
-
-  int totalEvents = 0;
-  for (const char *entity : ENTITY_CALENDARS) {
-    Serial.println("");
-    Serial.print(">>> Processing calendar entity: ");
-    Serial.println(entity);
-    // Use the Calendar API to get events in range
-    // URL: /api/calendars/{entity}?start={start}&end={end}
-    String url = buildHaUrl(String("/api/calendars/") + entity + "?start=" +
-                            startStr + "&end=" + endStr);
-
-    Serial.print("Fetching Calendar URL: ");
-    Serial.println(url);
-    haArrayDoc.clear();
-
-    if (!fetchJson(url, haArrayDoc)) {
-      Serial.print("ERROR: Failed to fetch calendar: ");
-      Serial.println(entity);
-      Serial.print("URL was: ");
-      Serial.println(url);
-      Serial.println(">>> Moving to next calendar entity");
-      continue;
-    }
-
-    Serial.println(">>> fetchJson succeeded");
-
-    // Check if we got valid calendar data
-    if (!haArrayDoc.is<JsonArray>()) {
-      Serial.print("WARNING: Calendar response was not an array for entity: ");
-      Serial.println(entity);
-      Serial.print("Response type: ");
-      if (haArrayDoc.is<JsonObject>()) {
-        Serial.println("Object (unexpected)");
-        serializeJson(haArrayDoc, Serial);
-        Serial.println();
-      } else {
-        Serial.println("Unknown");
-      }
-      continue;
-    }
-
-    Serial.print("Calendar JSON fetched successfully for: ");
-    Serial.println(entity);
-
-    // The API returns a JSON Array of events directly
-    if (haArrayDoc.is<JsonArray>()) {
-      JsonArray events = haArrayDoc.as<JsonArray>();
-      Serial.print(">>> Found ");
-      Serial.print(events.size());
-      Serial.print(" events in ");
-      Serial.println(entity);
-
-      if (events.size() == 0) {
-        Serial.println(">>> No events in this calendar (empty array)");
-      }
-
-      for (JsonVariant v : events) {
-        CalendarEvent evt;
-
-        // "start": { "dateTime": "..." } or { "date": "..." }
-        if (v["start"]["dateTime"].is<String>()) {
-          evt.isoDateTime = v["start"]["dateTime"].as<String>();
-        } else if (v["start"]["date"].is<String>()) {
-          evt.isoDateTime = v["start"]["date"].as<String>(); // All day
-        }
-
-        evt.title = v["summary"].as<String>();
-        newEvents.push_back(evt);
-        totalEvents++;
-
-        Serial.print("  Event: ");
-        Serial.print(evt.title);
-        Serial.print(" at ");
-        Serial.println(evt.isoDateTime);
-      }
-    } else {
-      Serial.print("ERROR: Calendar response was not an array for ");
-      Serial.println(entity);
-      Serial.print("Response type: ");
-      if (haArrayDoc.is<JsonObject>()) {
-        Serial.println("Object");
-        serializeJson(haArrayDoc, Serial);
-        Serial.println();
-      } else {
-        Serial.println("Unknown");
-      }
-    }
-  }
-
-  Serial.print("Total calendar events fetched: ");
-  Serial.println(totalEvents);
-
-  // Format for display BEFORE sorting and limiting
-  for (auto &evt : newEvents) {
-    if (evt.isoDateTime.length() >= 10) {
-      // Simple parsing assuming ISO format YYYY-MM-DD...
-      evt.date = evt.isoDateTime.substring(5, 10); // MM-DD
-      if (evt.isoDateTime.length() >= 16) {
-        evt.startTime = evt.isoDateTime.substring(11, 16); // HH:MM
-      } else {
-        evt.startTime = "All Day";
-      }
-    }
-  }
-
-  // Sort by ISO datetime FIRST (to get chronological order)
-  std::sort(newEvents.begin(), newEvents.end(),
-            [](const CalendarEvent &a, const CalendarEvent &b) {
-              return a.isoDateTime < b.isoDateTime;
-            });
-
-  // NOW limit to display area (increase to 10 items to show more events for the
-  // week) Each event takes 2 lines (date/time + title), so 10 items = 5 events
-  if (newEvents.size() > 10) {
-    newEvents.resize(10);
-  }
-
-  Serial.print("Calendar events after sorting and limiting: ");
-  Serial.println(newEvents.size());
-
-  Serial.print("Final calendar events count after formatting: ");
-  Serial.println(newEvents.size());
-  Serial.println("=== fetchCalendar() complete ===");
-
-  calendarEvents = newEvents;
-  disableWiFiIfAllowed();
-}
-
-
-// ---------- Icon Drawing Functions ----------
-// Draw bitmap icons using pre-defined data
-void drawBitmapIcon(int32_t x, int32_t y, const uint8_t *icon_data,
-                    uint32_t width, uint32_t height) {
-  Rect_t icon_area = {
-      .x = x, .y = y, .width = (int32_t)width, .height = (int32_t)height};
-  epd_draw_image(icon_area, (uint8_t *)icon_data, BLACK_ON_WHITE);
-}
-
-// ---------- Drawing helpers ----------
-// Draw a text-based divider line using dashes
-void drawTextDivider(int32_t x, int32_t y, int32_t width) {
-  // Create a string of dashes (approximately 1 dash per 10 pixels for
-  // visibility)
-  int32_t numDashes = width / 10;
-  if (numDashes < 1)
-    numDashes = 1;
-
-  String dividerText = "";
-  for (int32_t i = 0; i < numDashes; i++) {
-    dividerText += "-";
-  }
-
-  // Draw the divider text
-  int32_t cursor_x = x;
-  int32_t cursor_y = y + FiraSans.advance_y + FiraSans.descender;
-  writeln((GFXfont *)&FiraSans, dividerText.c_str(), &cursor_x, &cursor_y,
-          NULL);
-}
-
-// Basic word-wrap: splits a string into lines that fit within maxChars.
-// If a single word exceeds maxChars, it will be split mid-word.
-std::vector<String> wrapText(const String &text, int maxChars) {
-  std::vector<String> lines;
-  if (maxChars <= 0) {
-    lines.push_back(text);
-    return lines;
-  }
-
-  int start = 0;
-  while (start < text.length()) {
-    int end = start + maxChars;
-    if (end >= text.length()) {
-      lines.push_back(text.substring(start));
-      break;
-    }
-
-    int lastSpace = text.lastIndexOf(' ', end);
-    if (lastSpace <= start) {
-      // No space found in range; force break at maxChars
-      lines.push_back(text.substring(start, end));
-      start = end;
-    } else {
-      lines.push_back(text.substring(start, lastSpace));
-      start = lastSpace + 1; // Skip space
-    }
-  }
-
-  return lines;
-}
-
-/**
- * Draw daily motivational quote on the display
- * Uses FiraSansSmall font, truncates if too long
- * Clears quote area before drawing
- */
-void drawQuote() {
-  if (quotes.empty()) {
-    Serial.println("No quotes available");
-    return;
-  }
-
-  // Get current quote
-  QuoteData currentQuote = quotes[currentQuoteIndex];
-
-  // Format quote text with quotes (no author)
-  String quoteText = "\"" + currentQuote.text + "\"";
-
-// Truncate overly long quotes to avoid running off the right edge.
-  const int MAX_QUOTE_CHARS = 110;
-  if (quoteText.length() > MAX_QUOTE_CHARS) {
-    quoteText = quoteText.substring(0, MAX_QUOTE_CHARS - 3) + "...";
-  }
-
-  Serial.print("Drawing quote: ");
-  Serial.println(quoteText);
-
-  // Clear and draw quote (single line, no author)
-  // Clear the quote area (don't extend beyond screen bounds - screen is 960px
-  // wide)
-  epd_clear_area(quoteArea);
-  int32_t cursor_x = quoteArea.x;
-  int32_t cursor_y =
-      quoteArea.y + FiraSansSmall.advance_y + FiraSansSmall.descender;
-
-  // Draw quote text only
-  writeln((GFXfont *)&FiraSansSmall, quoteText.c_str(), &cursor_x, &cursor_y,
-          NULL);
-}
-
-// Rotate to next quote
-void rotateQuote() {
-  if (quotes.empty()) {
-    return;
-  }
-
-  currentQuoteIndex++;
-  if (currentQuoteIndex >= (int)quotes.size()) {
-    currentQuoteIndex = 0;
-  }
-
-  Serial.print("Rotating to quote index: ");
-  Serial.println(currentQuoteIndex);
-
-  // Redraw the quote section
-  epd_poweron();
-  drawQuote();
-  epd_poweroff();
-}
-
-/**
- * Check if WiFi is currently connected
- * @return true if connected, false otherwise
- */
+// Simple connectivity helpers used across modules
 bool isWiFiConnected() { return (WiFi.status() == WL_CONNECTED); }
 
 void disableWiFiIfAllowed() {
@@ -1066,22 +266,6 @@ void enableOtaWindow() {
   otaEnabled = true;
   otaWindowEnds = millis() + OTA_WINDOW_MS;
   Serial.println("OTA window enabled");
-}
-
-/**
- * Draw WiFi status icon (connected or disconnected)
- *
- * @param x Left position
- * @param y Top position
- */
-void drawWiFiStatus(int32_t x, int32_t y) {
-  if (isWiFiConnected()) {
-    drawBitmapIcon(x, y, icon_wifi_connected_data, icon_wifi_connected_width,
-                   icon_wifi_connected_height);
-  } else {
-    drawBitmapIcon(x, y, icon_wifi_disconnected_data,
-                   icon_wifi_disconnected_width, icon_wifi_disconnected_height);
-  }
 }
 
 /**
@@ -1237,258 +421,6 @@ int getMinutesUntilNextEvent() {
 }
 
 
-
-// Draw mini calendar month view - shows current week (compact with small font)
-void drawMiniCalendar(int32_t x, int32_t y, int32_t width, int32_t height) {
-  time_t now;
-  time(&now);
-  struct tm timeinfo;
-  localtime_r(&now, &timeinfo);
-
-  // Get current day and weekday
-  int currentDay = timeinfo.tm_mday;
-  int currentWeekday = timeinfo.tm_wday; // 0 = Sunday, 6 = Saturday
-
-  // Calculate start of week (Sunday = 0)
-  int startDay = currentDay - currentWeekday;
-
-  // Get days in current month
-  int currentMonth = timeinfo.tm_mon + 1;
-  int currentYear = timeinfo.tm_year + 1900;
-  int daysInMonth = 31;
-  if (currentMonth == 4 || currentMonth == 6 || currentMonth == 9 ||
-      currentMonth == 11) {
-    daysInMonth = 30;
-  } else if (currentMonth == 2) {
-    daysInMonth = ((currentYear % 4 == 0 && currentYear % 100 != 0) ||
-                   (currentYear % 400 == 0))
-                      ? 29
-                      : 28;
-  }
-
-  // Adjust if startDay is before month start
-  if (startDay < 1) {
-    startDay = 1;
-  }
-
-  // Compact layout: day labels and numbers on same line, using small font
-  const char *dayLabels = "SMTWTFS";
-  int32_t dayWidth = width / 7;
-
-  // Draw day labels (S M T W T F S) - small font, top row
-  // Start at the very top of the area (y=495)
-  int32_t cursor_y = y + FiraSansSmall.advance_y + FiraSansSmall.descender;
-  for (int i = 0; i < 7; i++) {
-    int32_t cursor_x = x + (i * dayWidth) + (dayWidth / 2) - 2;
-    char label[2] = {dayLabels[i], '\0'};
-    writeln((GFXfont *)&FiraSansSmall, label, &cursor_x, &cursor_y, NULL);
-  }
-
-// Draw day numbers for current week (7 days) - small font, bottom row
-  cursor_y = y + FiraSansSmall.advance_y +
-             18; // Gap between labels and numbers for readability
-
-  for (int i = 0; i < 7; i++) {
-    int day = startDay + i;
-    if (day > daysInMonth)
-      break; // Past end of month
-
-    int32_t cursor_x =
-        x + (i * dayWidth) + (dayWidth / 2) - 3; // Center day number
-
-    // Draw day number
-    const GFXfont *dayFont = (GFXfont *)&FiraSansSmall;
-    int32_t num_y = cursor_y;
-    char dayStr[4];
-    snprintf(dayStr, sizeof(dayStr), "%d", day);
-    writeln(dayFont, dayStr, &cursor_x, &num_y, NULL);
-  }
-}
-
-
-void drawList(const Rect_t &area, const std::vector<String> &lines,
-              String header, bool drawIcons = false, int lineSpacing = 35,
-              const uint8_t *headerIconData = NULL,
-              uint32_t headerIconWidth = 0, uint32_t headerIconHeight = 0) {
-  epd_clear_area(area);
-
-  int32_t cursor_x = area.x;
-  int32_t cursor_y = area.y + FiraSans.advance_y + FiraSans.descender;
-
-  // Draw Header (only if provided and non-empty)
-  if (header.length() > 0) {
-    // Draw header icon if provided
-    if (headerIconData != NULL && headerIconWidth > 0 && headerIconHeight > 0) {
-      int32_t icon_x = cursor_x;
-      int32_t icon_y = cursor_y - headerIconHeight -
-                       2; // Position icon slightly above text baseline
-      drawBitmapIcon(icon_x, icon_y, headerIconData, headerIconWidth,
-                     headerIconHeight);
-      cursor_x += headerIconWidth + 5; // Space after icon
-    }
-
-    writeln((GFXfont *)&FiraSansMedium, header.c_str(), &cursor_x, &cursor_y,
-            NULL);
-
-    // If this is UPCOMING header, add countdown next to it
-    if (header == "UPCOMING") {
-      cursor_x += 10; // Space between header and countdown
-      int minutesUntilNext = getMinutesUntilNextEvent();
-      if (minutesUntilNext >= 0) {
-        int hours = minutesUntilNext / 60;
-        int mins = minutesUntilNext % 60;
-        char countdownStr[20];
-        if (hours > 0) {
-          snprintf(countdownStr, sizeof(countdownStr), "(Next: %dh %dm)", hours,
-                   mins);
-        } else {
-          snprintf(countdownStr, sizeof(countdownStr), "(Next: %dm)", mins);
-        }
-        writeln((GFXfont *)&FiraSansSmall, countdownStr, &cursor_x, &cursor_y,
-                NULL);
-      }
-    }
-
-    cursor_y += 35; // Increased header spacing to separate header from items
-  }
-
-  // Draw Items with word wrapping consideration
-  int itemIndex = 0;
-  for (const String &line : lines) {
-    cursor_x = area.x;
-
-    // Draw icon if needed (for todos)
-    if (drawIcons && itemIndex < (int)lines.size()) {
-      bool isChecked = (line.length() > 0 && line[0] == 'X');
-      int32_t icon_x = cursor_x;
-      int32_t icon_y = cursor_y - icon_checkbox_height - 2;
-
-      // Draw checkbox icon
-      if (isChecked) {
-        drawBitmapIcon(icon_x, icon_y, icon_checkbox_checked_data,
-                       icon_checkbox_checked_width,
-                       icon_checkbox_checked_height);
-      } else {
-        drawBitmapIcon(icon_x, icon_y, icon_checkbox_data, icon_checkbox_width,
-                       icon_checkbox_height);
-      }
-
-      cursor_x += icon_checkbox_width + 5; // Space after icon
-    }
-
-    const int32_t textStartX = cursor_x; // For wrapped lines after first
-
-    // Truncate long lines to fit in area width
-    String displayLine = line;
-
-    // Store original line for detection (before any modifications)
-    String originalLine = line;
-
-    // Remove icon prefix if present
-    if (displayLine.length() > 2 &&
-        (displayLine[0] == 'X' || displayLine[0] == '>')) {
-      displayLine = displayLine.substring(2);
-    }
-    // Adjust max length based on area width (450px = ~28 chars, 920px = ~50
-    // chars)
-    int maxChars = (area.width < 500)
-                       ? 28
-                       : 50; // Half width gets 28 chars, full width gets 50
-    std::vector<String> wrappedLines = wrapText(displayLine, maxChars);
-
-    // Check if this is a date/time line (starts with date pattern like "1/15"
-    // or contains "All Day") Use ORIGINAL line (before truncation) for
-    // detection
-    bool isDateTimeLine = false;
-
-    // More robust check: line must start with a digit and contain "/" within
-    // first 6 chars OR contain "All Day" Also check: lines that start with
-    // spaces are NOT date/time (they're indented titles)
-    if (originalLine.indexOf("All Day") >= 0) {
-      isDateTimeLine = true;
-    } else if (originalLine.length() > 0) {
-      // Check if first character is a digit (month) - NOT a space
-      char firstChar = originalLine.charAt(0);
-      if (firstChar >= '0' && firstChar <= '9') {
-        // Now check if there's a "/" within first 6 characters (covers "1/15",
-        // "10/15", "12/1")
-        int slashPos = originalLine.indexOf('/');
-        if (slashPos >= 1 && slashPos <= 5) {
-          isDateTimeLine = true;
-        }
-      }
-    }
-
-    // Debug logging for UPCOMING events
-    if (!drawIcons &&
-        itemIndex < 6) { // Log first 6 items to see date/time pairs
-      Serial.print("Line ");
-      Serial.print(itemIndex);
-      Serial.print(": original='");
-      Serial.print(
-          originalLine.substring(0, min(20, (int)originalLine.length())));
-      Serial.print("' display='");
-      Serial.print(
-          displayLine.substring(0, min(20, (int)displayLine.length())));
-      Serial.print("' isDateTime=");
-      Serial.println(isDateTimeLine);
-    }
-
-    // Render wrapped lines
-    bool firstWrapped = true;
-    for (const auto &wrapped : wrappedLines) {
-      cursor_x = firstWrapped ? cursor_x : textStartX;
-
-      // Use smaller font for date/time lines in calendar (not for todo items)
-      if (isDateTimeLine && !drawIcons) {
-        writeln((GFXfont *)&FiraSansSmall, wrapped.c_str(), &cursor_x,
-                &cursor_y, NULL);
-        cursor_y += lineSpacing + 2; // Extra spacing after small date/time line
-      } else {
-        writeln((GFXfont *)&FiraSansMedium, wrapped.c_str(), &cursor_x,
-                &cursor_y, NULL);
-        cursor_y += lineSpacing;
-      }
-
-      firstWrapped = false;
-    }
-
-    // Check if next line would overflow (check BEFORE incrementing for next
-    // line)
-    int nextY = cursor_y + lineSpacing;
-    int maxY = area.y + area.height;
-    Serial.print("drawList: After line ");
-    Serial.print(itemIndex);
-    Serial.print(", cursor_y=");
-    Serial.print(cursor_y);
-    Serial.print(", nextY would be=");
-    Serial.print(nextY);
-    Serial.print(", maxY=");
-    Serial.print(maxY);
-    Serial.print(", remaining=");
-    Serial.print(maxY - cursor_y);
-    Serial.println("px");
-
-    if (nextY > maxY) {
-      Serial.print(">>> STOPPING at item ");
-      Serial.print(itemIndex);
-      Serial.print(" - nextY (");
-      Serial.print(nextY);
-      Serial.print(") > maxY (");
-      Serial.print(maxY);
-      Serial.println(")");
-      break;
-    }
-    itemIndex++;
-  }
-
-  Serial.print("drawList: Completed - drew ");
-  Serial.print(itemIndex);
-  Serial.print(" out of ");
-  Serial.print(lines.size());
-  Serial.println(" lines");
-}
-
 // Update weather section only - compact display for top center with icon
 void updateWeatherSection(bool powerOn = true) {
   Serial.println("Updating Weather Section...");
@@ -1603,7 +535,8 @@ void drawDashboard() {
   time(&now);
   localtime_r(&now, &timeinfo);
   char dateStr[50];
-  strftime(dateStr, sizeof(dateStr), "%b %d", &timeinfo); // "Jan 15"
+  strftime(dateStr, sizeof(dateStr), "%a %b %d",
+           &timeinfo); // "Mon Jan 15"
   currentDateString = String(dateStr);
 
   int32_t date_x = clockArea.x;
@@ -1611,27 +544,16 @@ void drawDashboard() {
   epd_clear_area(clockArea);
   writeln((GFXfont *)&FiraSansMedium, dateStr, &date_x, &date_y, NULL);
 
-  // WiFi Status Indicator - Draw connected/disconnected icon
-  bool wifiConnected = isWiFiConnected();
-  Serial.print("WiFi connected: ");
-  Serial.println(wifiConnected ? "Yes" : "No");
-  Serial.print("WiFi status: ");
-  Serial.println(WiFi.status());
-  epd_clear_area(wifiStatusArea);
-  // Draw WiFi status icon (connected or disconnected)
-  drawWiFiStatus(wifiStatusArea.x, wifiStatusArea.y + 2);
-
   // Weather (Top Center) - Compact temperature display
   updateWeatherSection(false);
 
-  // Date area (was top-right) left blank to avoid extra refresh
-
   // ========== QUOTE SECTION ==========
-  drawQuote();
+  drawQuote(quotes, currentQuoteIndex, quoteArea);
 
   // Draw divider below quote section
   // Divider below quote
-  drawTextDivider(20, 95, 920);
+  drawTextDivider(quoteArea.x, quoteArea.y + quoteArea.height - 5,
+                  quoteArea.width);
 
   // ========== MIDDLE SECTION ==========
 
@@ -1748,15 +670,6 @@ void drawDashboard() {
            icon_calendar_data, icon_calendar_width, icon_calendar_height);
   Serial.println(">>> drawList for UPCOMING calendar completed");
 
-  // Divider above mini calendar
-  drawTextDivider(20, 435, 920);
-
-  // ========== BOTTOM SECTION ==========
-  // 6. Mini Calendar (Compact, Bottom Full Width)
-  epd_clear_area(miniCalendarArea);
-  drawMiniCalendar(miniCalendarArea.x, miniCalendarArea.y,
-                   miniCalendarArea.width, miniCalendarArea.height);
-
   Serial.println("=== drawDashboard complete ===");
 
   // Power off display to save battery
@@ -1788,8 +701,8 @@ void updateDate() {
   time(&now);
   localtime_r(&now, &timeinfo);
   char dateStr[50];
-  strftime(dateStr, sizeof(dateStr), "%b %d",
-           &timeinfo); // Shorter format: "Jan 15"
+  strftime(dateStr, sizeof(dateStr), "%a %b %d",
+           &timeinfo); // "Mon Jan 15"
   String newDateString = String(dateStr);
 
   currentDateString = newDateString;
@@ -1873,7 +786,7 @@ void setup() {
   initCollections();
 
   // Connect to WiFi
-  connectWiFi();
+  ensureWiFi();
 
   // Setup OTA (Over-The-Air) updates
   // IMPORTANT: If you change the password below, also update .platformio_env
@@ -1933,10 +846,10 @@ void setup() {
   updateDate(); // Initialize date display and tracking
 
   // Initial Fetch and full dashboard draw
-  fetchWeather();
-  fetchTodos();
-  fetchCalendar();
-  fetchQuotes();
+  fetchWeather(currentWeather);
+  fetchTodos(todoList);
+  fetchCalendar(calendarEvents);
+  fetchQuotes(quotes, currentQuoteIndex);
 
   drawDashboard();
 
@@ -2002,13 +915,13 @@ void loop() {
   if (buttonState == LOW && lastButtonState == HIGH) {
     Serial.println("OTA button pressed - enabling OTA window");
     enableOtaWindow();
-    connectWiFi();
+    ensureWiFi();
   }
   lastButtonState = buttonState;
 
   // If OTA is enabled but WiFi dropped, reconnect
   if (otaEnabled && WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
+    ensureWiFi();
   }
 
   // If OTA is not active, ensure WiFi is off (LED off)
@@ -2034,7 +947,7 @@ void loop() {
     lastWeatherUpdate = now;
 
     Serial.println("Updating Weather...");
-    fetchWeather();
+    fetchWeather(currentWeather);
     updateWeatherSection();
   }
 
@@ -2044,8 +957,8 @@ void loop() {
     lastCalTodoUpdate = now;
 
     Serial.println("Updating Calendar and Todo...");
-    fetchTodos();
-    fetchCalendar();
+    fetchTodos(todoList);
+    fetchCalendar(calendarEvents);
     updateCalendarTodoSections();
   }
 
@@ -2055,7 +968,7 @@ void loop() {
   if (lastQuoteFetch == 0 || (now - lastQuoteFetch) > quoteFetchInterval) {
     lastQuoteFetch = now;
     Serial.println("Fetching new quotes...");
-    fetchQuotes();
+    fetchQuotes(quotes, currentQuoteIndex);
     // Redraw full dashboard to show first quote
     drawDashboard();
   }
@@ -2065,7 +978,8 @@ void loop() {
       (now - lastQuoteRotation) > quoteRotateInterval) {
     lastQuoteRotation = now;
     Serial.println("Rotating quote...");
-    rotateQuote(); // rotateQuote() handles drawing and power management
+    rotateQuote(quotes, currentQuoteIndex,
+                quoteArea); // rotateQuote() handles drawing and power management
   }
 
   // Midnight full refresh (check once per minute)
