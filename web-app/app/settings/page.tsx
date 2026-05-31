@@ -4,18 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { AppConfig } from '@/lib/types';
-
-const DEFAULT_CONFIG: AppConfig = {
-  host: '',
-  port: 8123,
-  token: '',
-  weatherEntity: '',
-  quoteEntity: '',
-  todoEntities: [],
-  calendarEntities: [],
-  ip: '',
-  otaPassword: 'epd47ota',
-};
+import { DEFAULT_CONFIG, mergeWithDefaultConfig } from '@/lib/default-config';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -49,7 +38,7 @@ export default function SettingsPage() {
     if (savedConfig) {
       try {
         const parsed = JSON.parse(savedConfig);
-        const merged = { ...DEFAULT_CONFIG, ...parsed };
+        const merged = mergeWithDefaultConfig(parsed);
         setSavedConfig(merged);
         reset(merged);
         // Seed available entity lists with saved selections so dropdowns keep context
@@ -66,6 +55,23 @@ export default function SettingsPage() {
       } catch (e) {
         console.error('Failed to load saved config:', e);
       }
+    } else {
+      reset(DEFAULT_CONFIG);
+      setSavedConfig(DEFAULT_CONFIG);
+      setAvailableEntities((prev) => ({
+        todos: DEFAULT_CONFIG.todoEntities.length
+          ? Array.from(new Set([...DEFAULT_CONFIG.todoEntities, ...prev.todos]))
+          : prev.todos,
+        calendars: DEFAULT_CONFIG.calendarEntities.length
+          ? Array.from(new Set([...DEFAULT_CONFIG.calendarEntities, ...prev.calendars]))
+          : prev.calendars,
+        weather: DEFAULT_CONFIG.weatherEntity
+          ? Array.from(new Set([DEFAULT_CONFIG.weatherEntity, ...prev.weather]))
+          : prev.weather,
+        sensors: DEFAULT_CONFIG.quoteEntity
+          ? Array.from(new Set([DEFAULT_CONFIG.quoteEntity, ...prev.sensors]))
+          : prev.sensors,
+      }));
     }
   }, [reset]);
 

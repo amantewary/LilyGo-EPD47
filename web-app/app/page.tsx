@@ -3,19 +3,8 @@
 import { useState, useEffect } from 'react';
 import Dashboard from '@/components/Dashboard';
 import { AppConfig } from '@/lib/types';
+import { DEFAULT_CONFIG, mergeWithDefaultConfig } from '@/lib/default-config';
 import Link from 'next/link';
-
-const DEFAULT_CONFIG: AppConfig = {
-  host: process.env.NEXT_PUBLIC_HA_HOST || '',
-  port: parseInt(process.env.NEXT_PUBLIC_HA_PORT || '8123'),
-  token: process.env.NEXT_PUBLIC_HA_TOKEN || '',
-  weatherEntity: 'weather.toronto_forecast',
-  quoteEntity: 'sensor.quote_of_the_day',
-  todoEntities: ['todo.errands', 'todo.work', 'todo.personal'],
-  calendarEntities: ['calendar.aman_outlook_calendar', 'calendar.home_2'],
-  ip: process.env.NEXT_PUBLIC_OTA_DEVICE_IP || '',
-  otaPassword: process.env.NEXT_PUBLIC_OTA_PASSWORD || 'epd47ota',
-};
 
 export default function Home() {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
@@ -27,17 +16,9 @@ export default function Home() {
     if (savedConfig) {
       try {
         const parsed = JSON.parse(savedConfig);
-        const mergedConfig = { ...DEFAULT_CONFIG, ...parsed };
-        // Ensure arrays are arrays
-        if (!Array.isArray(mergedConfig.todoEntities)) {
-          mergedConfig.todoEntities = [];
-        }
-        if (!Array.isArray(mergedConfig.calendarEntities)) {
-          mergedConfig.calendarEntities = [];
-        }
+        const mergedConfig = mergeWithDefaultConfig(parsed);
         setConfig(mergedConfig);
         setIsConfigured(true);
-        console.log('Loaded config from localStorage:', mergedConfig);
       } catch (e) {
         console.error('Failed to parse saved config:', e);
       }
@@ -87,15 +68,8 @@ export default function Home() {
             if (savedConfig) {
               try {
                 const parsed = JSON.parse(savedConfig);
-                const mergedConfig = { ...DEFAULT_CONFIG, ...parsed };
-                if (!Array.isArray(mergedConfig.todoEntities)) {
-                  mergedConfig.todoEntities = [];
-                }
-                if (!Array.isArray(mergedConfig.calendarEntities)) {
-                  mergedConfig.calendarEntities = [];
-                }
+                const mergedConfig = mergeWithDefaultConfig(parsed);
                 setConfig(mergedConfig);
-                console.log('Reloaded config:', mergedConfig);
               } catch (e) {
                 console.error('Failed to reload config:', e);
               }
@@ -106,10 +80,9 @@ export default function Home() {
           Reload Config
         </button>
       </div>
-      <div className="bg-epd-white shadow-lg rounded-lg overflow-hidden">
+      <div className="bg-epd-white overflow-hidden">
         <Dashboard config={config} />
       </div>
     </div>
   );
 }
-

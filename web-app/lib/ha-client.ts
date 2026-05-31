@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { WeatherData, TodoItem, CalendarEvent, QuoteData, HAConfig, EntityConfig } from './types';
+import { logSafeError } from './safe-error';
 
 export class HAClient {
   private client: AxiosInstance;
@@ -30,7 +31,7 @@ export class HAClient {
         icon: state.attributes.icon || '',
       };
     } catch (error) {
-      console.error('Error fetching weather:', error);
+      logSafeError('Error fetching weather:', error);
       return {
         temperature: '-- C',
         condition: '--',
@@ -65,7 +66,7 @@ export class HAClient {
           }
         }
       } catch (error) {
-        console.error(`Error fetching todos from ${entityId}:`, error);
+        logSafeError(`Error fetching todos from ${entityId}:`, error);
       }
     }
 
@@ -107,7 +108,7 @@ export class HAClient {
           });
         }
       } catch (error) {
-        console.error(`Error fetching calendar from ${entityId}:`, error);
+        logSafeError(`Error fetching calendar from ${entityId}:`, error);
       }
     }
 
@@ -141,7 +142,7 @@ export class HAClient {
 
       return quotes;
     } catch (error) {
-      console.error('Error fetching quotes:', error);
+      logSafeError('Error fetching quotes:', error);
       return [];
     }
   }
@@ -167,4 +168,3 @@ export class HAClient {
     };
   }
 }
-

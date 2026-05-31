@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
+import { logSafeError } from '@/lib/safe-error';
 
 export async function POST(request: NextRequest) {
   try {
@@ -52,7 +53,7 @@ export async function POST(request: NextRequest) {
       sensors: sensors.sort(),
     });
   } catch (error: any) {
-    console.error('Entities API error:', error);
+    logSafeError('Entities API error:', error);
     if (error.response) {
       return NextResponse.json(
         { error: `Home Assistant API error: ${error.response.status} ${error.response.statusText}` },
@@ -65,4 +66,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

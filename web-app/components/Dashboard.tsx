@@ -3,11 +3,9 @@
 import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 import { DashboardData, AppConfig } from '@/lib/types';
-import Clock from './Clock';
 import Weather from './Weather';
 import TodoList from './TodoList';
 import CalendarEvents from './CalendarEvents';
-import MiniCalendar from './MiniCalendar';
 import Quote from './Quote';
 
 interface DashboardProps {
@@ -35,20 +33,28 @@ export default function Dashboard({ config }: DashboardProps) {
       }
 
       const baseUrl = '/api/ha';
-      const params = new URLSearchParams({
+      const requestConfig = {
         host: config.host,
-        port: config.port.toString(),
+        port: config.port,
         token: config.token,
-      });
+      };
+      const jsonPost = (path: string, body: Record<string, unknown>) =>
+        fetch(`${baseUrl}/${path}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ...requestConfig, ...body }),
+        });
 
       // Build fetch promises - handle empty arrays
       const fetchPromises: Promise<Response>[] = [
-        fetch(`${baseUrl}/weather?${params}&entity=${config.weatherEntity}`),
+        jsonPost('weather', { entity: config.weatherEntity }),
       ];
 
       if (config.todoEntities && config.todoEntities.length > 0) {
         fetchPromises.push(
-          fetch(`${baseUrl}/todos?${params}&entities=${config.todoEntities.join(',')}`)
+          jsonPost('todos', { entities: config.todoEntities })
         );
       } else {
         // Return empty array if no todos configured
@@ -57,7 +63,7 @@ export default function Dashboard({ config }: DashboardProps) {
 
       if (config.calendarEntities && config.calendarEntities.length > 0) {
         fetchPromises.push(
-          fetch(`${baseUrl}/calendars?${params}&entities=${config.calendarEntities.join(',')}`)
+          jsonPost('calendars', { entities: config.calendarEntities })
         );
       } else {
         // Return empty array if no calendars configured
@@ -65,7 +71,7 @@ export default function Dashboard({ config }: DashboardProps) {
       }
 
       fetchPromises.push(
-        fetch(`${baseUrl}/quotes?${params}&entity=${config.quoteEntity}`)
+        jsonPost('quotes', { entity: config.quoteEntity })
       );
 
       const [weatherRes, todosRes, calendarsRes, quotesRes] = await Promise.all(fetchPromises);
@@ -130,7 +136,7 @@ export default function Dashboard({ config }: DashboardProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
-  // Rotate quotes every 3 hours
+  // Firmware rotates quotes every 6 hours.
   useEffect(() => {
     if (!data || data.quotes.length === 0) return;
 
@@ -140,7 +146,7 @@ export default function Dashboard({ config }: DashboardProps) {
         const nextIndex = (prev.currentQuoteIndex + 1) % prev.quotes.length;
         return { ...prev, currentQuoteIndex: nextIndex };
       });
-    }, 3 * 60 * 60 * 1000);
+    }, 6 * 60 * 60 * 1000);
 
     return () => clearInterval(rotateInterval);
   }, [data]);
@@ -173,45 +179,27 @@ export default function Dashboard({ config }: DashboardProps) {
   }
 
   return (
-    <div className="w-[960px] h-[540px] bg-epd-white p-6 flex flex-col gap-5 relative overflow-hidden border border-epd-gray/30 shadow-sm rounded-xl">
-      {/* Top Header */}
-      <div className="flex justify-between items-start">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3">
-            <Clock />
-            <div className="h-8 w-px bg-epd-gray/30" />
-          </div>
-          <div className="flex flex-col leading-tight">
-            <span className="text-[11px] tracking-[0.18em] text-epd-gray uppercase">Today</span>
-            <div className="text-lg font-semibold text-epd-black">{format(currentDate, 'EEE, MMM d')}</div>
-          </div>
-        </div>
-        <div className="px-4 py-3 rounded-lg border border-epd-gray/30 bg-white/60 shadow-inner min-w-[200px] flex justify-end">
-          <Weather weather={data.weather} />
+    <div className="w-[960px] h-[540px] bg-epd-white relative overflow-hidden border border-epd-gray/20">
+      <div className="absolute left-[20px] top-[20px] w-[220px] h-[35px] flex items-center">
+        <div className="text-[22px] font-semibold leading-none text-epd-black">
+          {format(currentDate, 'EEE MMM dd')}
         </div>
       </div>
 
-      {/* Quote Section */}
-      <div className="rounded-lg border border-epd-gray/30 bg-white/70 px-4 py-3">
+      <div className="absolute left-[820px] top-[20px] w-[120px] h-[35px]">
+        <Weather weather={data.weather} />
+      </div>
+
+      <div className="absolute left-[20px] top-[60px] w-[920px] h-[70px] overflow-hidden">
         <Quote quotes={data.quotes} currentIndex={data.currentQuoteIndex} />
       </div>
+      <div className="absolute left-[20px] top-[125px] w-[920px] border-t border-dashed border-epd-black" />
 
-      {/* Middle Section - Todo and Calendar */}
-      <div className="flex gap-5 flex-1">
-        <div className="w-[450px] h-full rounded-lg border border-epd-gray/30 bg-white/70 px-4 py-3 shadow-sm">
-          <TodoList todos={data.todos} />
-        </div>
-        <div className="w-[450px] h-full rounded-lg border border-epd-gray/30 bg-white/70 px-4 py-3 shadow-sm">
-          <CalendarEvents events={data.calendarEvents} />
-        </div>
+      <div className="absolute left-[20px] top-[175px] w-[450px] h-[345px] overflow-hidden">
+        <TodoList todos={data.todos} />
       </div>
-
-      {/* Divider */}
-      <div className="border-t border-epd-gray/40 pt-3">
-        {/* Mini Calendar */}
-        <div className="h-[50px]">
-          <MiniCalendar />
-        </div>
+      <div className="absolute left-[490px] top-[175px] w-[450px] h-[345px] overflow-hidden">
+        <CalendarEvents events={data.calendarEvents} />
       </div>
     </div>
   );

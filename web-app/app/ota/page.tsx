@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
+import { DEFAULT_CONFIG, mergeWithDefaultConfig } from '@/lib/default-config';
 
 export default function OTAPage() {
   const router = useRouter();
@@ -30,13 +31,15 @@ export default function OTAPage() {
 
   const handleBuildAndUpload = async () => {
     const savedConfig = localStorage.getItem('epd47-config');
-    if (!savedConfig) {
+    if (!savedConfig && (!DEFAULT_CONFIG.ip || !DEFAULT_CONFIG.otaPassword)) {
       setBuildError('Please configure device settings first');
       return;
     }
 
     try {
-      const config = JSON.parse(savedConfig);
+      const config = savedConfig
+        ? mergeWithDefaultConfig(JSON.parse(savedConfig))
+        : DEFAULT_CONFIG;
       if (!config.ip || !config.otaPassword) {
         setBuildError('Device IP and OTA password must be configured');
         return;
@@ -86,13 +89,15 @@ export default function OTAPage() {
 
   const handleUpload = async () => {
     const savedConfig = localStorage.getItem('epd47-config');
-    if (!savedConfig) {
+    if (!savedConfig && (!DEFAULT_CONFIG.ip || !DEFAULT_CONFIG.otaPassword)) {
       setError('Please configure device settings first');
       return;
     }
 
     try {
-      const config = JSON.parse(savedConfig);
+      const config = savedConfig
+        ? mergeWithDefaultConfig(JSON.parse(savedConfig))
+        : DEFAULT_CONFIG;
       if (!config.ip || !config.otaPassword) {
         setError('Device IP and OTA password must be configured');
         return;

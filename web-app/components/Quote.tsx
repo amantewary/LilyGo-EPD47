@@ -21,23 +21,18 @@ export default function Quote({ quotes, currentIndex }: QuoteProps) {
     return null;
   }
 
-  const quoteText = `"${displayQuote.text}"`;
-  const maxLength = 120;
+  const quoteText = `"${displayQuote.text}"${displayQuote.author ? ` - ${displayQuote.author}` : ''}`;
+  const maxLength = 150;
   const truncatedText =
     quoteText.length > maxLength
       ? `${quoteText.substring(0, maxLength - 3)}...`
       : quoteText;
 
   return (
-    <div className="flex flex-col gap-1">
-      <div className="text-base text-epd-black italic leading-relaxed">
+    <div className="h-full text-epd-black">
+      <div className="text-[19px] leading-[1.35]">
         {truncatedText}
       </div>
-      {displayQuote.author && (
-        <div className="text-xs text-epd-gray uppercase tracking-[0.12em]">
-          — {displayQuote.author}
-        </div>
-      )}
     </div>
   );
 }
